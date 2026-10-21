@@ -39,12 +39,22 @@ function errText(e){
 const cfg = window.SKLAD_CONFIG || {};
 document.querySelectorAll(".appTitle").forEach(h => h.textContent = cfg.TITLE || "Склад проката");
 document.title = cfg.TITLE || "Склад проката";
-if(!cfg.SUPABASE_URL || /ВАШ-ПРОЕКТ/.test(cfg.SUPABASE_URL) || !cfg.SUPABASE_KEY || /ВСТАВЬТЕ/.test(cfg.SUPABASE_KEY) || !window.supabase){
-  show("setupView"); return;
+function setupError(title, html){ $("setupTitle").textContent = title; $("setupText").innerHTML = html; show("setupView"); }
+if(window.SKLAD_CONFIG_FAILED){
+  setupError("Не найден файл config.js", "Проверьте, что <code>config.js</code> лежит рядом с <code>index.html</code> в корне репозитория."); return;
+}
+if(!cfg.SUPABASE_URL || /ВАШ-ПРОЕКТ/.test(cfg.SUPABASE_URL) || !cfg.SUPABASE_KEY || /ВСТАВЬТЕ/.test(cfg.SUPABASE_KEY)){
+  setupError("Сайт ещё не подключён к базе", "Откройте файл <code>config.js</code> и впишите адрес проекта Supabase и публичный ключ. Подробности — в README."); return;
+}
+if(!/^https:\/\/[a-z0-9-]+\.supabase\.co\/?$/i.test(cfg.SUPABASE_URL.trim())){
+  setupError("Неверный адрес в config.js", "<code>SUPABASE_URL</code> должен выглядеть так: <code>https://xxxx.supabase.co</code> — без пробелов и лишнего в конце."); return;
+}
+if(window.SKLAD_LIB_FAILED || !window.supabase){
+  setupError("Не загрузилась библиотека Supabase", "Сайт настроен, но браузер не смог скачать библиотеку с cdn.jsdelivr.net и unpkg.com. Обновите страницу (Ctrl+F5). Если не помогло — попробуйте другую сеть или мобильный интернет: возможно, эти адреса блокирует провайдер."); return;
 }
 const sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_KEY, { auth:{ persistSession:true, autoRefreshToken:true, detectSessionInUrl:true } });
 
-let me = null, items = [], profiles = {}, logRows = [], channel = null, started = false, recovering = false;
+let me = null, items = [], profiles = {}, logRows = [], events = [], lines = [], channel = null, started = false, recovering = false;
 
 opts($("fCat"), CATS, true); opts($("fState"), Object.keys(STATES), true); opts($("fStatus"), Object.keys(STATUSES), true);
 opts($("e_category"), CATS); opts($("e_state"), Object.keys(STATES)); opts($("e_status"), Object.keys(STATUSES)); opts($("e_unit"), UNITS);
@@ -122,19 +132,29 @@ async function startApp(){
   $("usersTab").hidden = !can("admin");
   $("addBtn").hidden = !can("manager");
 
-  const [it, pr, lg] = await Promise.all([
+  const [it, pr, lg, ev, el] = await Promise.all([
     sb.from("items").select("*").order("id"),
     sb.from("profiles").select("*").order("created_at"),
-    sb.from("item_log").select("*").order("created_at", { ascending:false }).limit(300)
+    sb.from("item_log").select("*").order("created_at", { ascending:false }).limit(300),
+    sb.from("events").select("*").order("date_from"),
+    sb.from("event_items").select("*").order("id")
   ]);
   if(it.error){ toast(errText(it.error)); }
   items = it.data || []; logRows = lg.data || [];
   (pr.data || []).forEach(p => profiles[p.id] = p);
-  renderStock(); renderLog(); renderUsers();
+  if(ev.error || el.error){ EV.missing = true; } else { events = ev.data || []; lines = el.data || []; }
+  renderStock(); renderLog(); renderUsers(); renderEvents();
   subscribe();
-  const h = location.hash.slice(1); if(["stock","log","users"].includes(h)) setTab(h);
+  const h = location.hash.slice(1);
+  if(/^ev-\d+$/.test(h)) openEvent(+h.slice(3)); else if(["stock","events","log","users"].includes(h)) setTab(h);
 }
 
+function upsertRow(arr, p){
+  if(p.eventType === "DELETE") return arr.filter(r => r.id !== p.old.id);
+  const k = arr.findIndex(r => r.id === p.new.id);
+  if(k >= 0){ arr[k] = p.new; return arr; }
+  return [...arr, p.new];
+}
 function subscribe(){
   channel = sb.channel("sklad")
     .on("postgres_changes", { event:"*", schema:"public", table:"items" }, p => {
@@ -146,13 +166,19 @@ function subscribe(){
       }
       renderStock();
     })
+    .on("postgres_changes", { event:"*", schema:"public", table:"events" }, p => {
+      events = upsertRow(events, p); renderEvents(); renderStock();
+    })
+    .on("postgres_changes", { event:"*", schema:"public", table:"event_items" }, p => {
+      lines = upsertRow(lines, p); renderEvents(); renderStock();
+    })
     .on("postgres_changes", { event:"INSERT", schema:"public", table:"item_log" }, p => {
       logRows.unshift(p.new); logRows = logRows.slice(0, 300); renderLog();
     })
     .on("postgres_changes", { event:"*", schema:"public", table:"profiles" }, p => {
       if(p.eventType === "DELETE") delete profiles[p.old.id]; else profiles[p.new.id] = p.new;
       if(p.new && p.new.id === me.id && p.new.role !== me.role){ toast("Ваша роль изменилась — обновляю страницу"); setTimeout(() => location.reload(), 1200); }
-      renderUsers(); renderStock();
+      renderUsers(); renderStock(); renderEvents();
     })
     .subscribe(status => {
       const on = status === "SUBSCRIBED";
@@ -165,10 +191,14 @@ function subscribe(){
 function setTab(t){
   if(t === "users" && !can("admin")) t = "stock";
   document.querySelectorAll("#mainTabs .tab").forEach(b => b.classList.toggle("active", b.dataset.tab === t));
-  ["stock","log","users"].forEach(x => $("tab-" + x).hidden = x !== t);
-  history.replaceState(null, "", "#" + t);
+  ["stock","events","log","users"].forEach(x => $("tab-" + x).hidden = x !== t);
+  if(t === "events" && EV.open){ history.replaceState(null, "", "#ev-" + EV.open); }
+  else history.replaceState(null, "", "#" + t);
 }
-document.querySelectorAll("#mainTabs .tab").forEach(b => b.onclick = () => setTab(b.dataset.tab));
+document.querySelectorAll("#mainTabs .tab").forEach(b => b.onclick = () => {
+  if(b.dataset.tab === "events" && b.classList.contains("active") && EV.open){ closeEvent(); return; }
+  setTab(b.dataset.tab);
+});
 
 // ---------- склад ----------
 function placesOf(){ return [...new Set(items.map(i => i.place || "Без места"))].sort((a,b) => a.localeCompare(b,"ru")); }
@@ -180,7 +210,7 @@ function renderStock(){
   $("sItems").textContent = items.length;
   $("sUnits").textContent = items.reduce((a,i) => a + (num(i.qty_fact) || 0), 0);
   $("sIssues").textContent = items.filter(isIssue).length;
-  $("sOut").textContent = items.filter(i => i.status === "В прокате" || i.status === "На мероприятии").reduce((a,i) => a + (num(i.qty_fact) || 0), 0);
+  $("sOut").textContent = items.reduce((a,i) => a + outQty(i.id), 0);
   const wp = items.filter(i => num(i.qty_plan) != null);
   $("sDiff").textContent = wp.length ? wp.filter(i => num(i.qty_fact) !== num(i.qty_plan)).length : "—";
 
@@ -213,7 +243,7 @@ function rowHtml(i){
     <div class="qty"><div class="qtyBox">
       <button type="button" data-act="dec" aria-label="Минус один" ${w}>−</button>
       <input type="number" min="0" inputmode="numeric" value="${fact ?? ""}" aria-label="Количество факт" data-act="qty" ${w}>
-      <button type="button" data-act="inc" aria-label="Плюс один" ${w}>+</button><span class="u">${esc(i.unit || "шт.")}</span></div>${diff}</div>
+      <button type="button" data-act="inc" aria-label="Плюс один" ${w}>+</button><span class="u">${esc(i.unit || "шт.")}</span></div>${diff}${outTag(i)}</div>
     <div class="st1"><select class="chip ${STATES[i.state] || "c-off"}" data-act="state" aria-label="Состояние" ${w}>${Object.keys(STATES).map(s => `<option ${s === i.state ? "selected" : ""}>${s}</option>`).join("")}</select></div>
     <div class="st2"><select class="chip ${STATUSES[i.status] || "c-off"}" data-act="status" aria-label="Статус" ${w}>${Object.keys(STATUSES).map(s => `<option ${s === i.status ? "selected" : ""}>${s}</option>`).join("")}</select></div>
     <button type="button" class="edit" data-act="edit" aria-label="Открыть карточку" title="Открыть карточку"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4z"/></svg></button>
@@ -269,7 +299,11 @@ function closeEditor(){ $("scrim").hidden = true; editing = null; }
 $("addBtn").onclick = () => openEditor(null);
 $("cancelBtn").onclick = closeEditor;
 $("scrim").addEventListener("mousedown", e => { if(e.target === $("scrim")) closeEditor(); });
-document.addEventListener("keydown", e => { if(e.key === "Escape" && !$("scrim").hidden) closeEditor(); });
+document.addEventListener("keydown", e => {
+  if(e.key !== "Escape") return;
+  if(!$("scrim").hidden) closeEditor();
+  ["evScrim","pkScrim","prScrim"].forEach(id => $(id).hidden = true);
+});
 $("form").addEventListener("submit", async e => {
   e.preventDefault();
   const d = {};
@@ -297,10 +331,11 @@ const fmt = v => v == null || v === "" ? "—" : String(v);
 function renderLog(){
   const q = $("logQ").value.trim().toLowerCase();
   const name = id => profiles[id] ? (profiles[id].full_name || profiles[id].email) : (id ? "удалённый пользователь" : "система");
-  const rows = logRows.filter(r => !q || [r.item_name, name(r.user_id)].join(" ").toLowerCase().includes(q));
+  const rows = logRows.filter(r => !q || [r.item_name, name(r.user_id), r.changes && r.changes._item].join(" ").toLowerCase().includes(q));
   if(!rows.length){ $("logList").innerHTML = `<div class="empty" style="border:0">${q ? "Нет записей по этому запросу." : "Изменений пока не было. Здесь появится каждое изменение на складе."}</div>`; return; }
   const ACT = { insert:"добавил(а)", update:"изменил(а)", delete:"удалил(а)" };
   $("logList").innerHTML = rows.map(r => {
+    if(r.kind === "event" || r.kind === "event_line") return logEventHtml(r, name);
     const ch = r.changes ? Object.entries(r.changes).filter(([k]) => FIELDS[k]).map(([k,[a,b]]) => `<li>${FIELDS[k]}: ${esc(fmt(a))} → <b>${esc(fmt(b))}</b></li>`).join("") : "";
     const t = new Date(r.created_at);
     return `<div class="ev"><time datetime="${esc(r.created_at)}" title="${t.toLocaleString("ru-RU")}">${t.toLocaleDateString("ru-RU",{day:"2-digit",month:"2-digit"})} ${t.toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"})}</time>
@@ -308,6 +343,7 @@ function renderLog(){
   }).join("");
 }
 $("logQ").addEventListener("input", renderLog);
+$("logList").addEventListener("click", e => { const a = e.target.closest("[data-ev]"); if(a){ e.preventDefault(); openEvent(+a.dataset.ev); } });
 
 // ---------- пользователи ----------
 function renderUsers(){
@@ -342,6 +378,493 @@ $("csvBtn").onclick = () => {
   a.download = "sklad_" + new Date().toISOString().slice(0,10) + ".csv";
   document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 };
+
+// =====================================================================
+// ---------- мероприятия и календарь ----------
+// =====================================================================
+const EV_ST = {
+  planned:   { t:"Запланировано", c:"c-info" },
+  out:       { t:"На выезде",     c:"c-warn" },
+  returned:  { t:"Завершено",     c:"c-ok"   },
+  cancelled: { t:"Отменено",      c:"c-off"  }
+};
+const evSt = e => EV_ST[e.status] || EV_ST.planned;
+const EV_FIELDS = { title:"Название", venue:"Площадка", client:"Заказчик", date_from:"Начало", date_to:"Окончание", responsible:"Ответственный", status:"Статус", note:"Примечание" };
+const MONTHS = ["Январь","Февраль","Март","Апрель","Май","Июнь","Июль","Август","Сентябрь","Октябрь","Ноябрь","Декабрь"];
+const EV = { view:"cal", month:new Date(new Date().getFullYear(), new Date().getMonth(), 1), sel:null, open:null, missing:false };
+
+const pad = n => String(n).padStart(2, "0");
+const dkey = d => d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+const dparse = s => { const [y,m,d] = String(s).split("-").map(Number); return new Date(y, m - 1, d); };
+const todayKey = () => dkey(new Date());
+EV.sel = todayKey();
+const isActive = e => e.status === "planned" || e.status === "out";
+const fmtD = (s, o) => dparse(s).toLocaleDateString("ru-RU", o || { day:"numeric", month:"short" }).replace(/\./g, "");
+function fmtRange(e){
+  if(e.date_from === e.date_to) return fmtD(e.date_from, { weekday:"short", day:"numeric", month:"short" });
+  const a = dparse(e.date_from), b = dparse(e.date_to);
+  if(a.getMonth() === b.getMonth() && a.getFullYear() === b.getFullYear()) return a.getDate() + "–" + fmtD(e.date_to);
+  return fmtD(e.date_from) + " – " + fmtD(e.date_to);
+}
+const personName = id => id && profiles[id] ? (profiles[id].full_name || profiles[id].email) : "";
+const evById = id => events.find(e => e.id === id);
+const itemById = id => items.find(i => i.id === id);
+const linesOf = evId => lines.filter(l => l.event_id === evId);
+// сколько единиц занимает строка: после отгрузки — сколько реально уехало
+const lineQty = (l, e) => (e.status === "out" || e.status === "returned") && l.qty_out != null ? +l.qty_out : +l.qty;
+
+// Кто ещё держит эту позицию в пересекающиеся даты
+function busyFor(itemId, from, to, exceptId){
+  const res = [];
+  lines.forEach(l => {
+    if(l.item_id !== itemId || l.event_id === exceptId) return;
+    const e = evById(l.event_id);
+    if(!e || !isActive(e) || !(e.date_from <= to && e.date_to >= from)) return;
+    res.push({ ev:e, qty:lineQty(l, e) });
+  });
+  return res;
+}
+const freeQty = (item, from, to, exceptId) => (num(item.qty_fact) || 0) - busyFor(item.id, from, to, exceptId).reduce((a, b) => a + b.qty, 0);
+function outQty(itemId){
+  let n = 0;
+  lines.forEach(l => { if(l.item_id !== itemId) return; const e = evById(l.event_id); if(e && e.status === "out") n += lineQty(l, e); });
+  return n;
+}
+function outTag(i){ const o = outQty(i.id); return o ? `<span class="outtag">${o} на выезде</span>` : ""; }
+function conflictsOf(e){
+  if(!isActive(e)) return [];
+  return linesOf(e.id).map(l => {
+    const it = itemById(l.item_id); if(!it) return null;
+    const need = lineQty(l, e), free = freeQty(it, e.date_from, e.date_to, e.id);
+    return need > free ? { l, it, need, free, others:busyFor(it.id, e.date_from, e.date_to, e.id) } : null;
+  }).filter(Boolean);
+}
+function shortagesOf(e){
+  if(e.status !== "returned") return [];
+  return linesOf(e.id).map(l => {
+    const sent = l.qty_out != null ? +l.qty_out : +l.qty, back = l.qty_back != null ? +l.qty_back : sent;
+    return back < sent ? { l, it:itemById(l.item_id), miss:sent - back } : null;
+  }).filter(Boolean);
+}
+
+// ---------- обзор ----------
+function renderEvents(){
+  if(!me) return;
+  const outN = events.filter(e => e.status === "out").length;
+  $("outCount").textContent = outN; $("outCount").hidden = !outN;
+  $("outCount").title = "На выезде: " + outN;
+  $("evAddBtn").hidden = !can("manager") || EV.missing;
+  const open = EV.open ? evById(EV.open) : null;
+  if(EV.open && !open && !EV.missing){ EV.open = null; if(!$("tab-events").hidden) history.replaceState(null, "", "#events"); }
+  $("evBrowse").hidden = !!open; $("evDetail").hidden = !open;
+  if(open){ renderEventDetail(open); return; }
+  if(EV.missing){
+    $("calWrap").hidden = true; $("monthNav").hidden = true; $("evList").hidden = false;
+    $("evList").innerHTML = `<div class="empty"><strong>Мероприятия ещё не подключены к базе</strong>Администратору нужно один раз выполнить файл <code>supabase/02_events.sql</code> в Supabase → SQL Editor, затем обновить страницу.</div>`;
+    return;
+  }
+  document.querySelectorAll("[data-evview]").forEach(b => b.classList.toggle("active", b.dataset.evview === EV.view));
+  $("calWrap").hidden = EV.view !== "cal"; $("monthNav").hidden = EV.view !== "cal"; $("evList").hidden = EV.view !== "list";
+  EV.view === "cal" ? renderCal() : renderEvList();
+}
+
+function renderCal(){
+  const y = EV.month.getFullYear(), mo = EV.month.getMonth();
+  $("mTitle").textContent = MONTHS[mo] + " " + y;
+  const shift = (new Date(y, mo, 1).getDay() + 6) % 7;
+  const days = new Date(y, mo + 1, 0).getDate();
+  const cells = Math.ceil((shift + days) / 7) * 7;
+  const t = todayKey();
+  const vis = events.filter(e => e.status !== "cancelled");
+  let h = ["Пн","Вт","Ср","Чт","Пт","Сб","Вс"].map((d, i) => `<div class="cal-h${i > 4 ? " we" : ""}">${d}</div>`).join("");
+  for(let i = 0; i < cells; i++){
+    const d = new Date(y, mo, 1 - shift + i), k = dkey(d);
+    const evs = vis.filter(e => e.date_from <= k && e.date_to >= k).sort((a, b) => a.date_from.localeCompare(b.date_from) || a.id - b.id);
+    const cls = ["cal-d"];
+    if(d.getMonth() !== mo) cls.push("other");
+    if(k === t) cls.push("today");
+    if(k === EV.sel) cls.push("sel");
+    if(i % 7 > 4) cls.push("we");
+    const chips = evs.slice(0, 3).map(e => {
+      const warn = conflictsOf(e).length || shortagesOf(e).length;
+      const label = (e.date_from === k || i % 7 === 0) ? esc(e.title) : "";
+      return `<span class="evchip st-${e.status}${e.date_from === k ? " s" : ""}${e.date_to === k ? " e" : ""}${warn ? " warn" : ""}" data-ev="${e.id}" title="${esc(e.title)}">${label || "&#8203;"}</span>`;
+    }).join("");
+    const lbl = d.toLocaleDateString("ru-RU", { day:"numeric", month:"long" }) + (evs.length ? ", мероприятий: " + evs.length : "");
+    h += `<div class="${cls.join(" ")}" data-day="${k}" role="button" tabindex="0" aria-label="${lbl}"><span class="dn">${d.getDate()}</span>${chips}${evs.length > 3 ? `<span class="more">ещё ${evs.length - 3}</span>` : ""}</div>`;
+  }
+  $("cal").innerHTML = h;
+  renderDayPanel();
+}
+
+function renderDayPanel(){
+  const k = EV.sel;
+  const evs = events.filter(e => e.date_from <= k && e.date_to >= k).sort((a, b) => a.date_from.localeCompare(b.date_from));
+  $("dayPanel").innerHTML = `<div class="dp-head"><h3>${fmtD(k, { weekday:"long", day:"numeric", month:"long" })}</h3>${can("manager") ? `<button class="btn" type="button" data-newev="${k}">+ Мероприятие на этот день</button>` : ""}</div>`
+    + (evs.length ? `<div class="evcards">${evs.map(evCard).join("")}</div>` : `<p class="hint">В этот день мероприятий нет${can("manager") ? " — можно создать новое" : ""}.</p>`);
+}
+
+function evCard(e){
+  const ls = linesOf(e.id), units = ls.reduce((a, l) => a + lineQty(l, e), 0);
+  const c = conflictsOf(e), s = shortagesOf(e), d = dparse(e.date_from), resp = personName(e.responsible);
+  const tags = [`<span class="chip ${evSt(e).c}">${evSt(e).t}</span>`, `<span class="cnt">${ls.length} поз. · ${units} ед.</span>`];
+  if(c.length) tags.push(`<span class="chip c-bad">Не хватает: ${c.length} поз.</span>`);
+  if(s.length) tags.push(`<span class="chip c-bad">Не вернулось: ${s.reduce((a, x) => a + x.miss, 0)} ед.</span>`);
+  if(!ls.length && isActive(e)) tags.push(`<span class="chip c-warn">Оборудование не выбрано</span>`);
+  return `<button type="button" class="evcard st-${e.status}" data-ev="${e.id}">
+    <span class="evdate"><b>${d.getDate()}</b><small>${d.toLocaleDateString("ru-RU", { month:"short" }).replace(/\./g, "")}</small></span>
+    <span class="evbody"><span class="evtitle">${esc(e.title)}</span>
+      <span class="evmeta">${esc(fmtRange(e))}${e.venue ? " · " + esc(e.venue) : ""}${resp ? " · " + esc(resp) : ""}</span>
+      <span class="evtags">${tags.join("")}</span></span>
+  </button>`;
+}
+
+function renderEvList(){
+  const t = todayKey();
+  const overdue = events.filter(e => e.status === "planned" && e.date_to < t).sort((a, b) => a.date_from.localeCompare(b.date_from));
+  const up = events.filter(e => e.status === "out" || (e.status === "planned" && e.date_to >= t)).sort((a, b) => a.date_from.localeCompare(b.date_from));
+  const past = events.filter(e => e.status === "returned" || e.status === "cancelled").sort((a, b) => b.date_from.localeCompare(a.date_from)).slice(0, 40);
+  let h = "";
+  if(overdue.length) h += `<h3 class="sect bad">Дата прошла, но не отгружено</h3><p class="hint">Отметьте отгрузку и возврат или отмените — иначе оборудование числится забронированным.</p><div class="evcards">${overdue.map(evCard).join("")}</div>`;
+  h += `<h3 class="sect">Ближайшие и на выезде</h3>` + (up.length ? `<div class="evcards">${up.map(evCard).join("")}</div>` : `<div class="empty"><strong>Впереди мероприятий нет</strong>${can("manager") ? "Нажмите «+ Мероприятие», чтобы забронировать оборудование." : "Менеджер ещё не запланировал мероприятия."}</div>`);
+  if(past.length) h += `<h3 class="sect">Завершённые и отменённые</h3><div class="evcards">${past.map(evCard).join("")}</div>`;
+  $("evList").innerHTML = h;
+}
+
+document.querySelectorAll("[data-evview]").forEach(b => b.onclick = () => { EV.view = b.dataset.evview; renderEvents(); });
+$("mPrev").onclick = () => { EV.month = new Date(EV.month.getFullYear(), EV.month.getMonth() - 1, 1); renderCal(); };
+$("mNext").onclick = () => { EV.month = new Date(EV.month.getFullYear(), EV.month.getMonth() + 1, 1); renderCal(); };
+$("mToday").onclick = () => { const n = new Date(); EV.month = new Date(n.getFullYear(), n.getMonth(), 1); EV.sel = todayKey(); renderCal(); };
+$("evAddBtn").onclick = () => openEvForm(null, EV.view === "cal" ? EV.sel : todayKey());
+$("evBrowse").addEventListener("click", e => {
+  const nb = e.target.closest("[data-newev]"); if(nb){ openEvForm(null, nb.dataset.newev); return; }
+  const ev = e.target.closest("[data-ev]"); if(ev){ openEvent(+ev.dataset.ev); return; }
+  const day = e.target.closest("[data-day]");
+  if(day){ EV.sel = day.dataset.day; const d = dparse(EV.sel); if(d.getMonth() !== EV.month.getMonth()) EV.month = new Date(d.getFullYear(), d.getMonth(), 1); renderCal(); }
+});
+$("cal").addEventListener("keydown", e => { if((e.key === "Enter" || e.key === " ") && e.target.dataset.day){ e.preventDefault(); e.target.click(); } });
+
+function openEvent(id){ EV.open = id; setTab("events"); renderEvents(); window.scrollTo(0, 0); }
+function closeEvent(){ EV.open = null; history.replaceState(null, "", "#events"); renderEvents(); }
+
+// ---------- карточка мероприятия ----------
+function renderEventDetail(e){
+  const M = can("manager"), W = can("worker");
+  const ls = linesOf(e.id).map(l => ({ l, it:itemById(l.item_id) })).filter(x => x.it);
+  const c = conflictsOf(e), s = shortagesOf(e), resp = personName(e.responsible);
+  const units = ls.reduce((a, x) => a + lineQty(x.l, e), 0);
+  const btn = (act, label, cls = "", dis = false) => `<button type="button" class="btn ${cls}" data-evact="${act}"${dis ? " disabled" : ""}>${label}</button>`;
+  const acts = [];
+  if(e.status === "planned" && W) acts.push(btn("load", "Отгрузить", "primary", !ls.length));
+  if(e.status === "out" && W) acts.push(btn("return", "Принять возврат", "primary"));
+  if(M && (e.status === "planned" || e.status === "out")) acts.push(btn("pick", "+ Оборудование"));
+  if(M) acts.push(btn("edit", "Изменить"));
+  if(ls.length) acts.push(btn("copy", "Копировать список", "ghost"));
+  acts.push(`<span class="sp"></span>`);
+  if(M && e.status === "planned") acts.push(btn("cancel", "Отменить мероприятие", "ghost"));
+  if(M && e.status === "cancelled") acts.push(btn("restore", "Восстановить"));
+  if(M && e.status === "returned") acts.push(btn("reopen", "Вернуть в «На выезде»", "ghost"));
+  if(M && e.status !== "out") acts.push(btn("delete", "Удалить", "danger"));
+
+  let banner = "";
+  if(c.length) banner += `<div class="banner bad"><b>Не хватает оборудования на эти даты</b><ul>${c.map(x => `<li>${esc(x.it.name)}: нужно ${x.need}, свободно ${Math.max(0, x.free)}${x.others.length ? ` — занято: ${x.others.map(o => `<a href="#ev-${o.ev.id}" data-ev="${o.ev.id}">«${esc(o.ev.title)}»</a> (${o.qty})`).join(", ")}` : ""}</li>`).join("")}</ul></div>`;
+  if(s.length) banner += `<div class="banner bad"><b>Не вернулось с мероприятия</b><ul>${s.map(x => `<li>${esc(x.it ? x.it.name : "позиция")} — ${x.miss} ${esc(x.it ? x.it.unit || "шт." : "шт.")}</li>`).join("")}</ul><p class="hint">Проверьте машину и площадку. Если оборудование потеряно — уменьшите его количество на складе.</p></div>`;
+  if(e.status === "planned" && e.date_to < todayKey()) banner += `<div class="banner warn">Дата мероприятия прошла, а отгрузка не отмечена. Отметьте отгрузку и возврат или отмените мероприятие, чтобы снять бронь.</div>`;
+
+  // колонки по статусу
+  const colsHead = { planned:["Нужно","Свободно"], out:["Нужно","Погружено"], returned:["Погружено","Вернулось"], cancelled:["Было нужно",""] }[e.status];
+  const groups = {};
+  ls.forEach(x => (groups[x.it.place || "Без места"] ??= []).push(x));
+  const body = Object.keys(groups).sort((a, b) => a.localeCompare(b, "ru")).map(place => {
+    const rows = groups[place].sort((a, b) => (a.it.name || "").localeCompare(b.it.name || "", "ru", { numeric:true })).map(({ l, it }) => {
+      const u = esc(it.unit || "шт.");
+      let c1 = "", c2 = "", bad = false;
+      if(e.status === "planned"){
+        const free = freeQty(it, e.date_from, e.date_to, e.id); bad = +l.qty > free;
+        c1 = M ? `<span class="qtyBox sm"><button type="button" data-lact="dec" aria-label="Меньше">−</button><input type="number" min="1" inputmode="numeric" value="${+l.qty}" data-lact="qty" aria-label="Нужно"><button type="button" data-lact="inc" aria-label="Больше">+</button></span>` : `<b>${+l.qty}</b> ${u}`;
+        c2 = `<span class="${bad ? "neg" : "muted"}">${Math.max(0, free)} из ${num(it.qty_fact) || 0}</span>`;
+      } else if(e.status === "out"){
+        c1 = `${+l.qty} ${u}`; const o = l.qty_out != null ? +l.qty_out : +l.qty; bad = o < +l.qty;
+        c2 = `<b class="${bad ? "neg" : ""}">${o}</b> ${u}`;
+      } else if(e.status === "returned"){
+        const o = l.qty_out != null ? +l.qty_out : +l.qty, b = l.qty_back != null ? +l.qty_back : o; bad = b < o;
+        c1 = `${o} ${u}`; c2 = `<b class="${bad ? "neg" : "pos-ok"}">${b}</b> ${u}`;
+      } else { c1 = `${+l.qty} ${u}`; }
+      const st = it.state && it.state !== "Исправно" ? ` <span class="chip ${STATES[it.state] || "c-off"} xs">${esc(it.state)}</span>` : "";
+      return `<div class="lrow${bad ? " bad" : ""}" data-line="${l.id}">
+        <div class="lname">${esc(it.name)}${it.maker ? ` <span class="maker">${esc(it.maker)}</span>` : ""}${st}${it.note ? `<div class="note">${esc(it.note)}</div>` : ""}</div>
+        <div class="lc">${c1}</div><div class="lc">${c2}</div>
+        <div class="lx">${M && e.status === "planned" ? `<button type="button" class="edit" data-lact="del" aria-label="Убрать из списка" title="Убрать из списка">✕</button>` : ""}</div>
+      </div>`;
+    }).join("");
+    return `<section class="group"><div class="ghead"><h2>${esc(place)}</h2><small>${groups[place].length} поз.</small></div>${rows}</section>`;
+  }).join("");
+
+  $("evDetail").innerHTML = `
+    <button type="button" class="btn ghost back" data-evact="back">← Все мероприятия</button>
+    <div class="evhead">
+      <div class="evhead-main">
+        <h2 class="evh">${esc(e.title)}</h2>
+        <div class="evfacts">
+          <span><small>Даты</small>${esc(fmtRange(e))}</span>
+          ${e.venue ? `<span><small>Площадка</small>${esc(e.venue)}</span>` : ""}
+          ${e.client ? `<span><small>Заказчик</small>${esc(e.client)}</span>` : ""}
+          ${resp ? `<span><small>Ответственный</small>${esc(resp)}</span>` : ""}
+          <span><small>Оборудование</small>${ls.length} поз. · ${units} ед.</span>
+        </div>
+        ${e.note ? `<p class="evnote">${esc(e.note)}</p>` : ""}
+      </div>
+      <span class="chip lg ${evSt(e).c}">${evSt(e).t}</span>
+    </div>
+    <div class="actions evacts">${acts.join("")}</div>
+    ${banner}
+    ${ls.length ? `<div class="lhead"><span>Позиция</span><span>${colsHead[0]}</span><span>${colsHead[1]}</span><span></span></div>${body}`
+      : `<div class="empty"><strong>Оборудование ещё не выбрано</strong>${M && isActive(e) ? `<button type="button" class="btn primary" data-evact="pick" style="margin-top:12px">+ Добавить оборудование</button>` : ""}</div>`}`;
+}
+
+// действия в карточке
+$("evDetail").addEventListener("click", async ev => {
+  const lk = ev.target.closest("a[data-ev]"); if(lk){ ev.preventDefault(); openEvent(+lk.dataset.ev); return; }
+  const e = evById(EV.open); if(!e) return;
+  const lb = ev.target.closest("[data-lact]");
+  if(lb && lb.tagName === "BUTTON"){
+    const l = lines.find(x => x.id === +lb.closest("[data-line]").dataset.line); if(!l) return;
+    if(lb.dataset.lact === "inc") setLineQty(l, +l.qty + 1);
+    if(lb.dataset.lact === "dec") setLineQty(l, Math.max(1, +l.qty - 1));
+    if(lb.dataset.lact === "del"){
+      const { error } = await sb.from("event_items").delete().eq("id", l.id);
+      if(error) toast(errText(error)); else { lines = lines.filter(x => x.id !== l.id); renderEvents(); renderStock(); }
+    }
+    return;
+  }
+  const b = ev.target.closest("[data-evact]"); if(!b) return;
+  const a = b.dataset.evact;
+  if(a === "back") closeEvent();
+  if(a === "edit") openEvForm(e);
+  if(a === "pick") openPicker(e);
+  if(a === "load") openProcess(e, "load");
+  if(a === "return") openProcess(e, "return");
+  if(a === "copy") copyEventList(e);
+  if(a === "cancel") setEvStatus(e, "cancelled", "Мероприятие отменено, бронь снята");
+  if(a === "restore") setEvStatus(e, "planned", "Мероприятие восстановлено");
+  if(a === "reopen") setEvStatus(e, "out", "Мероприятие снова на выезде");
+  if(a === "delete"){
+    if(!b.classList.contains("armed")){ b.classList.add("armed"); b.textContent = "Точно удалить?"; return; }
+    const { error } = await sb.from("events").delete().eq("id", e.id);
+    if(error){ toast(errText(error)); return; }
+    events = events.filter(x => x.id !== e.id); lines = lines.filter(x => x.event_id !== e.id);
+    toast("Мероприятие удалено"); closeEvent(); renderStock();
+  }
+});
+$("evDetail").addEventListener("change", ev => {
+  const inp = ev.target; if(inp.dataset.lact !== "qty") return;
+  const l = lines.find(x => x.id === +inp.closest("[data-line]").dataset.line); if(l) setLineQty(l, Math.max(1, Math.round(num(inp.value) || 1)));
+});
+const lineTimers = {};
+function setLineQty(l, v){
+  l.qty = v; renderEvents(); renderStock();
+  clearTimeout(lineTimers[l.id]);
+  lineTimers[l.id] = setTimeout(async () => {
+    const { error } = await sb.from("event_items").update({ qty:v }).eq("id", l.id);
+    if(error) toast(errText(error));
+  }, 600);
+}
+async function setEvStatus(e, status, msg){
+  const { error } = await sb.from("events").update({ status }).eq("id", e.id);
+  if(error){ toast(errText(error)); return false; }
+  e.status = status; renderEvents(); renderStock(); if(msg) toast(msg); return true;
+}
+async function copyEventList(e){
+  const groups = {};
+  linesOf(e.id).forEach(l => { const it = itemById(l.item_id); if(it) (groups[it.place || "Без места"] ??= []).push([it, lineQty(l, e)]); });
+  let t = `${e.title} — ${fmtRange(e)}` + (e.venue ? `\nПлощадка: ${e.venue}` : "") + (personName(e.responsible) ? `\nОтветственный: ${personName(e.responsible)}` : "");
+  Object.keys(groups).sort((a, b) => a.localeCompare(b, "ru")).forEach(p => {
+    t += `\n\n${p}:`;
+    groups[p].sort((a, b) => a[0].name.localeCompare(b[0].name, "ru", { numeric:true })).forEach(([it, q]) => t += `\n— ${it.name}${it.maker ? " " + it.maker : ""} × ${q}`);
+  });
+  try { await navigator.clipboard.writeText(t); toast("Список скопирован — можно вставить в мессенджер"); }
+  catch(_) { toast("Не удалось скопировать автоматически"); }
+}
+
+// ---------- форма мероприятия ----------
+let evEditing = null;
+function openEvForm(e, date){
+  evEditing = e || null;
+  $("evFormTitle").textContent = e ? "Изменить мероприятие" : "Новое мероприятие";
+  const d = e || { title:"", date_from:date || todayKey(), date_to:date || todayKey(), venue:"", client:"", responsible:me.id, note:"" };
+  ["title","date_from","date_to","venue","client","note"].forEach(f => $("v_" + f).value = d[f] ?? "");
+  const staff = Object.values(profiles).filter(p => LV[p.role] >= LV.worker).sort((a, b) => (a.full_name || "").localeCompare(b.full_name || "", "ru"));
+  $("v_responsible").innerHTML = `<option value="">— не назначен —</option>` + staff.map(p => `<option value="${p.id}">${esc(p.full_name || p.email)} · ${ROLES[p.role]}</option>`).join("");
+  $("v_responsible").value = d.responsible || "";
+  $("evFormErr").hidden = true; $("evScrim").hidden = false;
+  setTimeout(() => $("v_title").focus(), 30);
+}
+$("v_date_from").addEventListener("change", () => { if(!$("v_date_to").value || $("v_date_to").value < $("v_date_from").value) $("v_date_to").value = $("v_date_from").value; });
+$("evForm").addEventListener("submit", async ev => {
+  ev.preventDefault();
+  const d = { title:$("v_title").value.trim(), date_from:$("v_date_from").value, date_to:$("v_date_to").value || $("v_date_from").value,
+    venue:$("v_venue").value.trim() || null, client:$("v_client").value.trim() || null, responsible:$("v_responsible").value || null, note:$("v_note").value.trim() || null };
+  const err = t => { $("evFormErr").textContent = t; $("evFormErr").hidden = false; };
+  if(!d.title) return err("Укажите название.");
+  if(!d.date_from) return err("Укажите дату начала.");
+  if(d.date_to < d.date_from) return err("Окончание не может быть раньше начала.");
+  $("evSaveBtn").disabled = true;
+  const res = evEditing ? await sb.from("events").update(d).eq("id", evEditing.id) : await sb.from("events").insert(d).select().single();
+  $("evSaveBtn").disabled = false;
+  if(res.error) return err(errText(res.error));
+  $("evScrim").hidden = true;
+  if(evEditing){ Object.assign(evEditing, d); toast("Сохранено"); renderEvents(); renderStock(); }
+  else {
+    const row = { status:"planned", ...res.data };
+    if(!evById(row.id)) events.push(row);
+    toast("Мероприятие создано — выберите оборудование");
+    openEvent(row.id); openPicker(evById(row.id));
+  }
+});
+
+// ---------- подбор оборудования ----------
+const PK = { ev:null, sel:new Map(), orig:new Map() };
+opts($("pkCat"), CATS, true);
+function openPicker(e){
+  PK.ev = e; PK.sel = new Map(); PK.orig = new Map();
+  linesOf(e.id).forEach(l => { PK.sel.set(l.item_id, +l.qty); PK.orig.set(l.item_id, l); });
+  $("pkHint").textContent = `«${e.title}», ${fmtRange(e)}. «Свободно» — сколько осталось с учётом других мероприятий в эти даты.`;
+  $("pkQ").value = ""; $("pkCat").value = ""; $("pkOnly").checked = false; $("pkErr").hidden = true;
+  renderPicker(); $("pkScrim").hidden = false; setTimeout(() => $("pkQ").focus(), 30);
+}
+function renderPicker(){
+  const e = PK.ev, q = $("pkQ").value.trim().toLowerCase(), c = $("pkCat").value, only = $("pkOnly").checked;
+  const list = items.filter(i => i.state !== "Списано" && (!c || i.category === c) && (!only || PK.sel.get(i.id) > 0) &&
+    (!q || [i.name, i.maker, i.model, i.place, i.inv].join(" ").toLowerCase().includes(q)))
+    .sort((a, b) => (a.category || "").localeCompare(b.category || "", "ru") || (a.name || "").localeCompare(b.name || "", "ru", { numeric:true }));
+  let lastCat = null;
+  $("pkList").innerHTML = list.length ? list.map(i => {
+    const v = PK.sel.get(i.id) || 0, free = freeQty(i, e.date_from, e.date_to, e.id), over = v > free;
+    const head = i.category !== lastCat ? `<div class="pkcat">${esc(i.category || "Без категории")}</div>` : ""; lastCat = i.category;
+    const st = i.state && i.state !== "Исправно" ? ` <span class="chip ${STATES[i.state] || "c-off"} xs">${esc(i.state)}</span>` : "";
+    return head + `<div class="pkrow${v ? " on" : ""}${over ? " bad" : ""}" data-pk="${i.id}">
+      <div class="lname">${esc(i.name)}${i.maker ? ` <span class="maker">${esc(i.maker)}</span>` : ""}${st}<div class="sub">${esc(i.place || "")}${i.note ? " · " + esc(i.note) : ""}</div></div>
+      <div class="pkfree ${free <= 0 ? "neg" : ""}">свободно <b>${Math.max(0, free)}</b> из ${num(i.qty_fact) || 0}${over ? `<span class="neg">больше, чем свободно</span>` : ""}</div>
+      <span class="qtyBox sm"><button type="button" data-pa="dec" aria-label="Меньше">−</button><input type="number" min="0" inputmode="numeric" value="${v || ""}" placeholder="0" data-pa="qty" aria-label="Количество"><button type="button" data-pa="inc" aria-label="Больше">+</button></span>
+    </div>`;
+  }).join("") : `<div class="empty" style="border:0">Ничего не найдено.</div>`;
+  let n = 0, u = 0; PK.sel.forEach(v => { if(v > 0){ n++; u += v; } });
+  $("pkSum").textContent = `Выбрано: ${n} поз. · ${u} ед.`;
+}
+["pkQ","pkCat","pkOnly"].forEach(id => $(id).addEventListener("input", renderPicker));
+$("pkList").addEventListener("click", ev => {
+  const b = ev.target.closest("button[data-pa]"); if(!b) return;
+  const id = +b.closest("[data-pk]").dataset.pk, v = PK.sel.get(id) || 0;
+  PK.sel.set(id, Math.max(0, v + (b.dataset.pa === "inc" ? 1 : -1))); renderPicker();
+});
+$("pkList").addEventListener("change", ev => {
+  if(ev.target.dataset.pa !== "qty") return;
+  PK.sel.set(+ev.target.closest("[data-pk]").dataset.pk, Math.max(0, Math.round(num(ev.target.value) || 0))); renderPicker();
+});
+$("pkSave").onclick = async () => {
+  const e = PK.ev, ins = [], upd = [], del = [];
+  PK.sel.forEach((v, itemId) => {
+    const o = PK.orig.get(itemId);
+    if(v > 0 && !o) ins.push({ event_id:e.id, item_id:itemId, qty:v });
+    else if(v > 0 && o && +o.qty !== v) upd.push([o.id, v]);
+    else if(v <= 0 && o) del.push(o.id);
+  });
+  $("pkSave").disabled = true;
+  const results = [];
+  if(ins.length) results.push(await sb.from("event_items").insert(ins).select());
+  for(const [id, v] of upd) results.push(await sb.from("event_items").update({ qty:v }).eq("id", id));
+  if(del.length) results.push(await sb.from("event_items").delete().in("id", del));
+  $("pkSave").disabled = false;
+  const bad = results.find(r => r.error);
+  if(bad){ $("pkErr").textContent = errText(bad.error); $("pkErr").hidden = false; return; }
+  const insRes = results[0] && ins.length ? results[0].data || [] : [];
+  insRes.forEach(r => { if(!lines.find(x => x.id === r.id)) lines.push(r); });
+  upd.forEach(([id, v]) => { const l = lines.find(x => x.id === id); if(l) l.qty = v; });
+  lines = lines.filter(l => !del.includes(l.id));
+  $("pkScrim").hidden = true; toast("Список оборудования сохранён"); renderEvents(); renderStock();
+};
+
+// ---------- отгрузка и возврат ----------
+const PR = { ev:null, mode:"load", vals:new Map() };
+function openProcess(e, mode){
+  PR.ev = e; PR.mode = mode; PR.vals = new Map();
+  linesOf(e.id).forEach(l => PR.vals.set(l.id, mode === "load" ? +l.qty : (l.qty_out != null ? +l.qty_out : +l.qty)));
+  $("prTitle").textContent = mode === "load" ? "Отгрузка на мероприятие" : "Приём возврата";
+  $("prHint").textContent = mode === "load"
+    ? `«${e.title}». Проверьте, сколько реально погрузили. Если чего-то меньше — исправьте число.`
+    : `«${e.title}». Пересчитайте, что вернулось. Всё, чего не хватает, будет отмечено как «не вернулось».`;
+  $("prSave").textContent = mode === "load" ? "Отгрузить" : "Принять возврат";
+  $("prErr").hidden = true; renderProcess(); $("prScrim").hidden = false;
+}
+function renderProcess(){
+  const e = PR.ev;
+  const ls = linesOf(e.id).map(l => ({ l, it:itemById(l.item_id) })).filter(x => x.it)
+    .sort((a, b) => (a.it.place || "").localeCompare(b.it.place || "", "ru") || a.it.name.localeCompare(b.it.name, "ru", { numeric:true }));
+  let lastPlace = null, diffN = 0;
+  $("prList").innerHTML = ls.map(({ l, it }) => {
+    const target = PR.mode === "load" ? +l.qty : (l.qty_out != null ? +l.qty_out : +l.qty);
+    const v = PR.vals.get(l.id), less = v < target; if(less) diffN++;
+    const head = it.place !== lastPlace ? `<div class="pkcat">${esc(it.place || "Без места")}</div>` : ""; lastPlace = it.place;
+    return head + `<div class="pkrow${less ? " bad" : " on"}" data-pr="${l.id}">
+      <div class="lname">${esc(it.name)}${it.maker ? ` <span class="maker">${esc(it.maker)}</span>` : ""}</div>
+      <div class="pkfree">${PR.mode === "load" ? "нужно" : "уехало"} <b>${target}</b> ${esc(it.unit || "шт.")}${less ? `<span class="neg">${PR.mode === "load" ? "погружено меньше" : "не вернулось " + (target - v)}</span>` : ""}</div>
+      <span class="qtyBox sm"><button type="button" data-pa="dec" aria-label="Меньше">−</button><input type="number" min="0" inputmode="numeric" value="${v}" data-pa="qty" aria-label="${PR.mode === "load" ? "Погружено" : "Вернулось"}"><button type="button" data-pa="inc" aria-label="Больше">+</button></span>
+    </div>`;
+  }).join("");
+  $("prSum").textContent = diffN ? `С расхождением: ${diffN} поз.` : "Всё полностью";
+}
+$("prAll").onclick = () => { linesOf(PR.ev.id).forEach(l => PR.vals.set(l.id, PR.mode === "load" ? +l.qty : (l.qty_out != null ? +l.qty_out : +l.qty))); renderProcess(); };
+$("prList").addEventListener("click", ev => {
+  const b = ev.target.closest("button[data-pa]"); if(!b) return;
+  const id = +b.closest("[data-pr]").dataset.pr; PR.vals.set(id, Math.max(0, (PR.vals.get(id) || 0) + (b.dataset.pa === "inc" ? 1 : -1))); renderProcess();
+});
+$("prList").addEventListener("change", ev => {
+  if(ev.target.dataset.pa !== "qty") return;
+  PR.vals.set(+ev.target.closest("[data-pr]").dataset.pr, Math.max(0, Math.round(num(ev.target.value) || 0))); renderProcess();
+});
+$("prSave").onclick = async () => {
+  const e = PR.ev, field = PR.mode === "load" ? "qty_out" : "qty_back";
+  $("prSave").disabled = true;
+  const res = await Promise.all([...PR.vals].map(([id, v]) => sb.from("event_items").update({ [field]:v }).eq("id", id)));
+  const bad = res.find(r => r.error);
+  if(bad){ $("prSave").disabled = false; $("prErr").textContent = errText(bad.error); $("prErr").hidden = false; return; }
+  PR.vals.forEach((v, id) => { const l = lines.find(x => x.id === id); if(l) l[field] = v; });
+  const ok = await setEvStatus(e, PR.mode === "load" ? "out" : "returned");
+  $("prSave").disabled = false;
+  if(!ok) return;
+  $("prScrim").hidden = true;
+  if(PR.mode === "load") toast("Отгружено — мероприятие на выезде");
+  else { const s = shortagesOf(e); toast(s.length ? `Возврат принят. Не вернулось: ${s.reduce((a, x) => a + x.miss, 0)} ед.` : "Возврат принят — всё на месте"); }
+};
+
+document.querySelectorAll("[data-close]").forEach(b => b.onclick = () => $(b.dataset.close).hidden = true);
+["evScrim","pkScrim","prScrim"].forEach(id => $(id).addEventListener("mousedown", e => { if(e.target === $(id)) $(id).hidden = true; }));
+
+// ---------- журнал: записи о мероприятиях ----------
+function evVal(k, v){
+  if(v == null || v === "") return "—";
+  if(k === "status") return EV_ST[v] ? EV_ST[v].t : v;
+  if(k === "responsible") return personName(v) || "—";
+  if(k === "date_from" || k === "date_to") return fmtD(v, { day:"numeric", month:"short", year:"numeric" });
+  return String(v);
+}
+function logEventHtml(r, name){
+  const t = new Date(r.created_at);
+  const link = evById(r.item_id) ? `<a href="#ev-${r.item_id}" data-ev="${r.item_id}">«${esc(r.item_name)}»</a>` : `«${esc(r.item_name || "")}»`;
+  let what;
+  if(r.kind === "event"){
+    const ch = r.changes ? Object.entries(r.changes).filter(([k]) => EV_FIELDS[k]).map(([k, [a, b]]) => `<li>${EV_FIELDS[k]}: ${esc(evVal(k, a))} → <b>${esc(evVal(k, b))}</b></li>`).join("") : "";
+    const verb = { insert:"создал(а) мероприятие", update:"изменил(а) мероприятие", delete:"удалил(а) мероприятие" }[r.action];
+    what = `<span class="act ${r.action}">${verb}</span> ${link}${ch ? `<ul>${ch}</ul>` : ""}`;
+  } else {
+    const c = r.changes || {}, [a, b] = c.qty || [], it = esc(c._item || "позиция");
+    what = r.action === "insert" ? `<span class="act insert">добавил(а)</span> ${it} × ${esc(fmt(b))} в ${link}`
+         : r.action === "delete" ? `<span class="act delete">убрал(а)</span> ${it} из ${link}`
+         : `<span class="act update">изменил(а)</span> ${it} в ${link}: ${esc(fmt(a))} → <b>${esc(fmt(b))}</b>`;
+  }
+  return `<div class="ev"><time datetime="${esc(r.created_at)}" title="${t.toLocaleString("ru-RU")}">${t.toLocaleDateString("ru-RU", { day:"2-digit", month:"2-digit" })} ${t.toLocaleTimeString("ru-RU", { hour:"2-digit", minute:"2-digit" })}</time>
+    <div class="what"><span class="who">${esc(name(r.user_id))}</span> ${what}</div></div>`;
+}
 
 boot();
 })();

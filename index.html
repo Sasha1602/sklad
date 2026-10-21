@@ -55,8 +55,8 @@
 <!-- ============ Ошибка настройки ============ -->
 <section id="setupView" class="center" hidden>
   <div class="card auth">
-    <h2 class="h2">Сайт ещё не подключён к базе</h2>
-    <p>Откройте файл <code>config.js</code> и впишите адрес проекта Supabase и публичный ключ. Подробности — в README.</p>
+    <h2 class="h2" id="setupTitle">Сайт ещё не подключён к базе</h2>
+    <p id="setupText">Откройте файл <code>config.js</code> и впишите адрес проекта Supabase и публичный ключ. Подробности — в README.</p>
   </div>
 </section>
 
@@ -66,6 +66,7 @@
     <div class="brand"><span class="tape"></span><h1 class="appTitle">Склад проката</h1></div>
     <nav class="tabs" id="mainTabs">
       <button type="button" class="tab active" data-tab="stock">Склад</button>
+      <button type="button" class="tab" data-tab="events">Мероприятия <span class="badge info" id="outCount" hidden></span></button>
       <button type="button" class="tab" data-tab="log">Журнал</button>
       <button type="button" class="tab" data-tab="users" id="usersTab" hidden>Пользователи <span class="badge" id="pendingCount" hidden></span></button>
     </nav>
@@ -98,6 +99,32 @@
       <div id="list"><div class="empty"><strong>Загружаю склад…</strong></div></div>
     </section>
 
+    <!-- Мероприятия -->
+    <section id="tab-events" hidden>
+      <div id="evBrowse">
+        <div class="filters evbar">
+          <div class="tabs small seg" role="tablist" aria-label="Вид">
+            <button type="button" class="tab active" data-evview="cal">Календарь</button>
+            <button type="button" class="tab" data-evview="list">Список</button>
+          </div>
+          <div class="monthNav" id="monthNav">
+            <button type="button" class="btn ghost icon" id="mPrev" aria-label="Предыдущий месяц">‹</button>
+            <b id="mTitle"></b>
+            <button type="button" class="btn ghost icon" id="mNext" aria-label="Следующий месяц">›</button>
+            <button type="button" class="btn ghost" id="mToday">Сегодня</button>
+          </div>
+          <span class="sp"></span>
+          <button class="btn primary" type="button" id="evAddBtn">+ Мероприятие</button>
+        </div>
+        <div id="calWrap">
+          <div class="cal" id="cal"></div>
+          <div class="dayPanel" id="dayPanel"></div>
+        </div>
+        <div id="evList" hidden></div>
+      </div>
+      <div id="evDetail" hidden></div>
+    </section>
+
     <!-- Журнал -->
     <section id="tab-log" hidden>
       <div class="filters"><input type="search" id="logQ" class="field grow" placeholder="Поиск по журналу: позиция или сотрудник"></div>
@@ -112,9 +139,9 @@
         <h3>Что может каждая роль</h3>
         <dl>
           <dt><span class="role r-pending">Ожидает</span></dt><dd>Зарегистрировался, но ничего не видит, пока вы не назначите роль.</dd>
-          <dt><span class="role r-viewer">Просмотр</span></dt><dd>Видит склад и журнал, ничего не меняет.</dd>
-          <dt><span class="role r-worker">Кладовщик</span></dt><dd>Меняет количество, состояние, статус и примечание. Не добавляет и не удаляет позиции.</dd>
-          <dt><span class="role r-manager">Менеджер</span></dt><dd>Полный доступ к оборудованию: добавляет, редактирует, удаляет.</dd>
+          <dt><span class="role r-viewer">Просмотр</span></dt><dd>Видит склад, мероприятия и журнал, ничего не меняет.</dd>
+          <dt><span class="role r-worker">Кладовщик</span></dt><dd>Меняет количество, состояние, статус и примечание. Отгружает оборудование на мероприятия и принимает возврат. Не добавляет и не удаляет позиции и мероприятия.</dd>
+          <dt><span class="role r-manager">Менеджер</span></dt><dd>Полный доступ к оборудованию и мероприятиям: создаёт, редактирует, бронирует, удаляет.</dd>
           <dt><span class="role r-admin">Администратор</span></dt><dd>Всё, что менеджер, плюс назначает роли пользователям.</dd>
         </dl>
         <p class="hint">Права проверяет сама база, поэтому обойти их через браузер нельзя. Свою роль администратор поменять не может, а последнего администратора нельзя понизить.</p>
@@ -154,11 +181,82 @@
     </div>
   </form>
 </div>
+<!-- ============ Мероприятие: создать / изменить ============ -->
+<div class="scrim" id="evScrim" hidden>
+  <form class="sheet" id="evForm" novalidate>
+    <h3 class="h2" id="evFormTitle">Новое мероприятие</h3>
+    <div class="grid">
+      <label class="full">Название<input id="v_title" class="field" placeholder="Свадьба Ивановых" required></label>
+      <label>Начало<input id="v_date_from" class="field" type="date" required></label>
+      <label>Окончание<input id="v_date_to" class="field" type="date" required></label>
+      <label>Площадка<input id="v_venue" class="field" placeholder="Ресторан, адрес"></label>
+      <label>Заказчик<input id="v_client" class="field" placeholder="Имя, телефон"></label>
+      <label class="full">Ответственный<select id="v_responsible" class="field"></select></label>
+      <label class="full">Примечание<textarea id="v_note" class="field" placeholder="Монтаж с 10:00, демонтаж после 23:00…"></textarea></label>
+    </div>
+    <p class="hint" style="margin-top:10px">Оборудование бронируется на все дни от начала до окончания. Включите сюда дни монтажа и демонтажа.</p>
+    <div class="msg" id="evFormErr" hidden></div>
+    <div class="actions">
+      <button type="submit" class="btn primary" id="evSaveBtn">Сохранить</button>
+      <button type="button" class="btn" data-close="evScrim">Отмена</button>
+    </div>
+  </form>
+</div>
+
+<!-- ============ Подбор оборудования ============ -->
+<div class="scrim" id="pkScrim" hidden>
+  <div class="sheet wide">
+    <h3 class="h2">Оборудование на мероприятие</h3>
+    <p class="hint" id="pkHint"></p>
+    <div class="filters" style="margin-top:12px">
+      <input type="search" id="pkQ" class="field grow" placeholder="Поиск по названию или месту">
+      <select id="pkCat" class="field"><option value="">Все категории</option></select>
+      <label class="check"><input type="checkbox" id="pkOnly"> только выбранное</label>
+    </div>
+    <div class="pkList" id="pkList"></div>
+    <div class="msg" id="pkErr" hidden></div>
+    <div class="actions">
+      <button type="button" class="btn primary" id="pkSave">Сохранить список</button>
+      <button type="button" class="btn" data-close="pkScrim">Отмена</button>
+      <span class="sp"></span><span class="hint" id="pkSum"></span>
+    </div>
+  </div>
+</div>
+
+<!-- ============ Отгрузка / возврат ============ -->
+<div class="scrim" id="prScrim" hidden>
+  <div class="sheet wide">
+    <h3 class="h2" id="prTitle">Отгрузка</h3>
+    <p class="hint" id="prHint"></p>
+    <div class="prTools"><button type="button" class="btn ghost" id="prAll">Отметить всё полностью</button></div>
+    <div class="pkList" id="prList"></div>
+    <div class="msg" id="prErr" hidden></div>
+    <div class="actions">
+      <button type="button" class="btn primary" id="prSave">Подтвердить</button>
+      <button type="button" class="btn" data-close="prScrim">Отмена</button>
+      <span class="sp"></span><span class="hint" id="prSum"></span>
+    </div>
+  </div>
+</div>
+
 <datalist id="placesList"></datalist>
 <div class="toast" id="toast" hidden></div>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
-<script src="config.js"></script>
-<script src="app.js"></script>
+<script>
+/* Загрузка: config.js и app.js без кэша, библиотека Supabase — с запасного CDN, если основной недоступен. */
+(function(){
+  var v = "?v=" + Date.now();
+  var libs = [
+    "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js",
+    "https://unpkg.com/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"
+  ];
+  function add(src, ok, fail){ var s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = fail || ok; document.body.appendChild(s); }
+  function lib(i){
+    if(i >= libs.length){ window.SKLAD_LIB_FAILED = true; return add("app.js" + v); }
+    add(libs[i], function(){ window.supabase ? add("app.js" + v) : lib(i + 1); }, function(){ lib(i + 1); });
+  }
+  add("config.js" + v, function(){ lib(0); }, function(){ window.SKLAD_CONFIG_FAILED = true; lib(0); });
+})();
+</script>
 </body>
 </html>

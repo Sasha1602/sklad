@@ -175,3 +175,122 @@ select.chip:disabled{cursor:default;opacity:1}
 @media (max-width:520px){.grid{grid-template-columns:1fr}}
 .actions{display:flex;gap:8px;margin-top:18px;flex-wrap:wrap}
 .toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:10px 16px;border-radius:8px;font-size:14px;z-index:30;max-width:calc(100% - 32px)}
+
+/* =================== Мероприятия =================== */
+.badge.info{background:var(--warn);color:var(--surface)}
+.btn.icon{width:38px;padding:0;font-size:20px}
+.muted{color:var(--muted)} .neg{color:var(--bad)} .pos-ok{color:var(--ok)}
+.chip.xs{font-size:11px;padding:1px 7px;vertical-align:1px}
+.chip.xs::before,.chip.lg::before{display:none}
+.chip.lg{font-size:13.5px;padding:6px 14px;font-weight:600;flex:none}
+#tab-events{padding-top:18px}
+.evbar{align-items:center}
+.seg{flex:none}
+.monthNav{display:flex;align-items:center;gap:4px}
+.monthNav b{font-family:var(--f-display);font-weight:600;font-size:15px;min-width:150px;text-align:center}
+.outtag{display:block;font-size:11px;color:var(--warn);font-weight:600;margin-top:1px}
+
+/* календарь */
+#calWrap{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;align-items:start}
+@media (max-width:1000px){#calWrap{grid-template-columns:1fr}}
+.cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));background:var(--line);gap:1px;border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+.cal-h{background:var(--surface-2);padding:6px 8px;font-size:11.5px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.cal-h.we{color:var(--bad)}
+.cal-d{background:var(--surface);min-height:96px;padding:4px 0 6px;display:flex;flex-direction:column;gap:2px;cursor:pointer;min-width:0;outline-offset:-2px}
+.cal-d:hover{background:var(--surface-2)}
+.cal-d.other{background:var(--bg)} .cal-d.other .dn{opacity:.45}
+.cal-d.we .dn{color:var(--bad)}
+.cal-d .dn{font-family:var(--f-mono);font-size:12.5px;font-weight:700;padding:0 8px;line-height:22px;font-variant-numeric:tabular-nums;align-self:flex-start;border-radius:999px}
+.cal-d.today .dn{background:var(--accent);color:var(--accent-ink);margin-left:4px;padding:0 6px}
+.cal-d.sel{box-shadow:inset 0 0 0 2px var(--accent)}
+.evchip{display:block;font-size:11.5px;font-weight:600;line-height:18px;height:18px;padding:0 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin:0 -1px;border-radius:0}
+.evchip.s{margin-left:4px;border-top-left-radius:5px;border-bottom-left-radius:5px}
+.evchip.e{margin-right:4px;border-top-right-radius:5px;border-bottom-right-radius:5px}
+.evchip.st-planned{background:var(--info-bg);color:var(--info)}
+.evchip.st-out{background:var(--warn-bg);color:var(--warn)}
+.evchip.st-returned{background:var(--ok-bg);color:var(--ok)}
+.evchip.warn.s{box-shadow:inset 3px 0 0 var(--bad)}
+.cal-d .more{font-size:11px;color:var(--muted);padding:0 8px}
+@media (max-width:640px){
+  .cal-d{min-height:58px}
+  .evchip{height:6px;line-height:6px;font-size:0;padding:0}
+  .cal-h{padding:6px 4px;text-align:center}
+  .cal-d .dn{padding:0 5px}
+  .monthNav b{min-width:120px;font-size:14px}
+  .evbar .sp{display:none}
+}
+.dayPanel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px;display:flex;flex-direction:column;gap:12px}
+.dp-head{display:flex;flex-direction:column;gap:10px}
+.dp-head h3{margin:0;font-size:15px}
+.dp-head h3::first-letter{text-transform:uppercase}
+.dayPanel .evcards{gap:8px}
+
+/* карточки мероприятий */
+.evcards{display:flex;flex-direction:column;gap:10px}
+.evcard{display:flex;gap:14px;align-items:flex-start;text-align:left;width:100%;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;color:var(--fg)}
+.evcard:hover{border-color:var(--muted)}
+.evcard.st-cancelled{opacity:.6}
+.evdate{flex:none;width:46px;text-align:center;border-right:1px solid var(--line);padding-right:12px}
+.evdate b{display:block;font-family:var(--f-mono);font-size:22px;line-height:1.1}
+.evdate small{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.evbody{display:flex;flex-direction:column;gap:4px;min-width:0}
+.evtitle{font-weight:700;font-size:15px;overflow-wrap:anywhere}
+.evmeta{font-size:13px;color:var(--muted);overflow-wrap:anywhere}
+.evtags{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:2px}
+.evtags .cnt{font-size:12px;color:var(--muted);font-family:var(--f-mono)}
+.sect{font-size:13px;text-transform:uppercase;letter-spacing:.06em;margin:22px 0 10px;color:var(--muted)}
+.sect:first-child{margin-top:0}
+.sect.bad{color:var(--bad)}
+#evList .hint{margin:-4px 0 10px}
+
+/* карточка мероприятия */
+.back{margin-bottom:10px;padding-left:0}
+.evhead{display:flex;gap:16px;align-items:flex-start;justify-content:space-between;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px}
+.evhead-main{min-width:0}
+.evh{font-family:var(--f-display);font-weight:600;font-size:20px;margin:0 0 12px;text-wrap:balance;overflow-wrap:anywhere}
+.evfacts{display:flex;flex-wrap:wrap;gap:10px 28px}
+.evfacts span{display:flex;flex-direction:column;font-size:14.5px;font-weight:500;min-width:0;overflow-wrap:anywhere}
+.evfacts small{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:500}
+.evnote{margin:12px 0 0;font-size:14px;color:var(--muted);white-space:pre-wrap}
+@media (max-width:560px){.evhead{flex-direction:column-reverse}}
+.evacts{margin:14px 0}
+.btn.armed{background:var(--bad);color:var(--surface);border-color:var(--bad)}
+.banner{border-radius:var(--r);padding:12px 14px;margin-bottom:14px;font-size:14px}
+.banner.bad{background:var(--bad-bg);color:var(--bad)}
+.banner.warn{background:var(--warn-bg);color:var(--warn)}
+.banner ul{margin:6px 0 0;padding-left:18px}
+.banner a{color:inherit;font-weight:600}
+.banner .hint{color:inherit;opacity:.8;margin-top:6px}
+.lhead,.lrow{display:grid;grid-template-columns:minmax(0,1fr) 150px 130px 40px;gap:12px;align-items:center}
+.lhead{padding:0 14px 6px;font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.lrow{padding:9px 14px;border-top:1px solid var(--line)}
+.ghead+.lrow{border-top:0}
+.lrow.bad{background:var(--bad-bg)}
+.lname{font-weight:600;min-width:0;overflow-wrap:anywhere}
+.lname .maker{font-weight:400;color:var(--muted)}
+.lc{font-family:var(--f-mono);font-size:14px;font-variant-numeric:tabular-nums}
+.lx{display:flex;justify-content:flex-end}
+@media (max-width:640px){
+  .lhead{display:none}
+  .lrow{grid-template-columns:minmax(0,1fr) minmax(0,1fr) 36px;gap:6px 10px}
+  .lrow .lname{grid-column:1/3;grid-row:1}
+  .lrow .lx{grid-column:3;grid-row:1}
+}
+.qtyBox.sm button{width:28px;height:28px;font-size:16px}
+.qtyBox.sm input{width:44px;font-size:15px}
+.lc .qtyBox input{background:transparent}
+
+/* подбор / отгрузка */
+.sheet.wide{max-width:820px}
+.pkList{max-height:min(60vh,560px);overflow:auto;border:1px solid var(--line);border-radius:var(--r);margin-top:10px}
+.pkcat{position:sticky;top:0;z-index:1;background:var(--surface-2);padding:6px 12px;font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);border-bottom:1px solid var(--line)}
+.pkrow{display:grid;grid-template-columns:minmax(0,1fr) 170px auto;gap:10px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line)}
+.pkrow.on{background:color-mix(in srgb,var(--ok-bg) 55%,transparent)}
+.pkrow.bad{background:var(--bad-bg)}
+.pkfree{font-size:12.5px;color:var(--muted)}
+.pkfree b{color:var(--fg);font-family:var(--f-mono)}
+.pkfree .neg{display:block;font-weight:600}
+@media (max-width:560px){.pkrow{grid-template-columns:minmax(0,1fr) auto}.pkrow .pkfree{grid-column:1;grid-row:2}.pkrow .qtyBox{grid-column:2;grid-row:1/3}}
+.prTools{margin-top:8px}
+
+.lname .sub{font-weight:400}
