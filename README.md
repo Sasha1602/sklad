@@ -43,7 +43,7 @@
 
 - **Project URL** → в `SUPABASE_URL`
 - **anon public** ключ (или **publishable** ключ, начинается с `sb_publishable_`) → в `SUPABASE_KEY`
-
+ 
 ```js
 window.SKLAD_CONFIG = {
   SUPABASE_URL: "https://abcdefgh.supabase.co",
