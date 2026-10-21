@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Склад проката</title>
+<meta name="theme-color" content="#f2a900">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2316191d'/%3E%3Cpath d='M-4 20 20-4M2 26 26 2M8 32 32 8M14 38 38 14' stroke='%23f2a900' stroke-width='4'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&family=Unbounded:wght@600&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ============ Экран входа ============ -->
+<section id="authView" class="center" hidden>
+  <div class="card auth">
+    <div class="brand"><span class="tape"></span><h1 class="appTitle">Склад проката</h1></div>
+    <div class="tabs small" role="tablist">
+      <button type="button" class="tab active" data-auth="login">Вход</button>
+      <button type="button" class="tab" data-auth="signup">Регистрация</button>
+    </div>
+    <form id="loginForm" class="stack">
+      <label>Почта<input id="li_email" class="field" type="email" autocomplete="email" required></label>
+      <label>Пароль<input id="li_pass" class="field" type="password" autocomplete="current-password" required></label>
+      <button class="btn primary" type="submit">Войти</button>
+      <button class="link" type="button" id="forgotBtn">Забыли пароль?</button>
+    </form>
+    <form id="signupForm" class="stack" hidden>
+      <label>Имя и фамилия<input id="su_name" class="field" autocomplete="name" required></label>
+      <label>Почта<input id="su_email" class="field" type="email" autocomplete="email" required></label>
+      <label>Пароль (от 6 символов)<input id="su_pass" class="field" type="password" autocomplete="new-password" minlength="6" required></label>
+      <button class="btn primary" type="submit">Зарегистрироваться</button>
+      <p class="hint">После регистрации администратор назначит вам роль. Первый зарегистрированный становится администратором.</p>
+    </form>
+    <form id="resetForm" class="stack" hidden>
+      <p class="hint">Придумайте новый пароль.</p>
+      <label>Новый пароль<input id="rs_pass" class="field" type="password" autocomplete="new-password" minlength="6" required></label>
+      <button class="btn primary" type="submit">Сохранить пароль</button>
+    </form>
+    <div id="authMsg" class="msg" hidden></div>
+  </div>
+</section>
+
+<!-- ============ Ожидание одобрения ============ -->
+<section id="pendingView" class="center" hidden>
+  <div class="card auth">
+    <div class="brand"><span class="tape"></span><h1 class="appTitle">Склад проката</h1></div>
+    <h2 class="h2">Заявка отправлена</h2>
+    <p>Вы вошли как <b id="pendingEmail"></b>. Администратор должен назначить вам роль. Страница откроется сама, как только это произойдёт.</p>
+    <button class="btn" type="button" data-logout>Выйти</button>
+  </div>
+</section>
+
+<!-- ============ Ошибка настройки ============ -->
+<section id="setupView" class="center" hidden>
+  <div class="card auth">
+    <h2 class="h2">Сайт ещё не подключён к базе</h2>
+    <p>Откройте файл <code>config.js</code> и впишите адрес проекта Supabase и публичный ключ. Подробности — в README.</p>
+  </div>
+</section>
+
+<!-- ============ Приложение ============ -->
+<div id="appView" hidden>
+  <header class="bar"><div class="wrap barIn">
+    <div class="brand"><span class="tape"></span><h1 class="appTitle">Склад проката</h1></div>
+    <nav class="tabs" id="mainTabs">
+      <button type="button" class="tab active" data-tab="stock">Склад</button>
+      <button type="button" class="tab" data-tab="log">Журнал</button>
+      <button type="button" class="tab" data-tab="users" id="usersTab" hidden>Пользователи <span class="badge" id="pendingCount" hidden></span></button>
+    </nav>
+    <div class="who"><span class="live" id="live"><span class="dot"></span><span id="liveText">…</span></span>
+      <span class="me"><span id="meName"></span> <span class="role" id="meRole"></span></span>
+      <button class="btn ghost" type="button" data-logout>Выйти</button></div>
+  </div></header>
+
+  <main class="wrap">
+    <!-- Склад -->
+    <section id="tab-stock">
+      <div class="stats">
+        <div class="stat"><b id="sItems">–</b><span>позиций</span></div>
+        <div class="stat"><b id="sUnits">–</b><span>единиц факт</span></div>
+        <div class="stat alert"><b id="sIssues">–</b><span>с замечаниями</span></div>
+        <div class="stat out"><b id="sOut">–</b><span>на выезде</span></div>
+        <div class="stat"><b id="sDiff">–</b><span>расхождения с учётом</span></div>
+      </div>
+      <div class="filters">
+        <input type="search" id="q" class="field grow" placeholder="Поиск: название, модель, номер, примечание">
+        <select id="fPlace" class="field"><option value="">Все места</option></select>
+        <select id="fCat" class="field"><option value="">Все категории</option></select>
+        <select id="fState" class="field"><option value="">Любое состояние</option></select>
+        <select id="fStatus" class="field"><option value="">Любой статус</option></select>
+        <label class="check"><input type="checkbox" id="fIssues"> только с замечаниями</label>
+        <span class="sp"></span>
+        <button class="btn" type="button" id="csvBtn">Скачать CSV</button>
+        <button class="btn primary" type="button" id="addBtn">+ Позиция</button>
+      </div>
+      <div id="list"><div class="empty"><strong>Загружаю склад…</strong></div></div>
+    </section>
+
+    <!-- Журнал -->
+    <section id="tab-log" hidden>
+      <div class="filters"><input type="search" id="logQ" class="field grow" placeholder="Поиск по журналу: позиция или сотрудник"></div>
+      <div class="card flat"><div id="logList" class="log"></div></div>
+      <p class="hint">Показаны последние 300 изменений.</p>
+    </section>
+
+    <!-- Пользователи -->
+    <section id="tab-users" hidden>
+      <div class="card flat"><div id="userList"></div></div>
+      <div class="legend">
+        <h3>Что может каждая роль</h3>
+        <dl>
+          <dt><span class="role r-pending">Ожидает</span></dt><dd>Зарегистрировался, но ничего не видит, пока вы не назначите роль.</dd>
+          <dt><span class="role r-viewer">Просмотр</span></dt><dd>Видит склад и журнал, ничего не меняет.</dd>
+          <dt><span class="role r-worker">Кладовщик</span></dt><dd>Меняет количество, состояние, статус и примечание. Не добавляет и не удаляет позиции.</dd>
+          <dt><span class="role r-manager">Менеджер</span></dt><dd>Полный доступ к оборудованию: добавляет, редактирует, удаляет.</dd>
+          <dt><span class="role r-admin">Администратор</span></dt><dd>Всё, что менеджер, плюс назначает роли пользователям.</dd>
+        </dl>
+        <p class="hint">Права проверяет сама база, поэтому обойти их через браузер нельзя. Свою роль администратор поменять не может, а последнего администратора нельзя понизить.</p>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- ============ Карточка позиции ============ -->
+<div class="scrim" id="scrim" hidden>
+  <form class="sheet" id="form" novalidate>
+    <h3 class="h2" id="formTitle">Новая позиция</h3>
+    <p class="hint" id="formNote" hidden>Ваша роль — кладовщик: можно менять количество факт, состояние, статус и примечание.</p>
+    <div class="grid">
+      <label class="full">Наименование<input id="e_name" class="field" data-lvl="manager" required></label>
+      <label>Категория<select id="e_category" class="field" data-lvl="manager"></select></label>
+      <label>Место хранения<input id="e_place" class="field" data-lvl="manager" list="placesList" placeholder="Кейс / стеллаж"></label>
+      <label>Производитель<input id="e_maker" class="field" data-lvl="manager"></label>
+      <label>Модель<input id="e_model" class="field" data-lvl="manager"></label>
+      <label>Инв. номер<input id="e_inv" class="field" data-lvl="manager"></label>
+      <label>Серийный номер<input id="e_serial" class="field" data-lvl="manager"></label>
+      <label>Кол-во факт<input id="e_qty_fact" class="field" data-lvl="worker" type="number" min="0" step="1" inputmode="numeric"></label>
+      <label>Кол-во по учёту<input id="e_qty_plan" class="field" data-lvl="manager" type="number" min="0" step="1" inputmode="numeric" placeholder="не задано"></label>
+      <label>Ед.<select id="e_unit" class="field" data-lvl="manager"></select></label>
+      <label>Цена за ед., ₽<input id="e_price" class="field" data-lvl="manager" type="number" min="0" step="1" inputmode="numeric"></label>
+      <label>Состояние<select id="e_state" class="field" data-lvl="worker"></select></label>
+      <label>Статус<select id="e_status" class="field" data-lvl="worker"></select></label>
+      <label class="full">Примечание<textarea id="e_note" class="field" data-lvl="worker"></textarea></label>
+    </div>
+    <div class="msg" id="formErr" hidden></div>
+    <div class="actions">
+      <button type="submit" class="btn primary" id="saveBtn">Сохранить</button>
+      <button type="button" class="btn" id="cancelBtn">Отмена</button>
+      <span class="sp"></span>
+      <button type="button" class="btn ghost" id="histBtn" hidden>История</button>
+      <button type="button" class="btn danger" id="delBtn" hidden>Удалить</button>
+    </div>
+  </form>
+</div>
+<datalist id="placesList"></datalist>
+<div class="toast" id="toast" hidden></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
