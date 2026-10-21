@@ -8,4 +8,3 @@ window.SKLAD_CONFIG = {
   SUPABASE_KEY: "sb_publishable_4qkGa9gDOquHOKdTzzwk7Q_haRl1NrI",
   TITLE: "Склад проката"
 };
-PUSH_PUBLIC_KEY: "BMdpLdkp-CoItmMQ74NzOFIx2j7rQTPXV30CFJZ-860RZ1mrE8oC2t_rWztHs8ypHM4XPji7_M1E5YIrpySy8F4",
