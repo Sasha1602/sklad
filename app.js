@@ -349,7 +349,7 @@ $("scrim").addEventListener("mousedown", e => { if(e.target === $("scrim")) clos
 document.addEventListener("keydown", e => {
   if(e.key !== "Escape") return;
   if(!$("scrim").hidden) closeEditor();
-  ["evScrim","pkScrim","prScrim","crScrim","scScrim","kitScrim","ekScrim"].forEach(id => $(id).hidden = true);
+  ["evScrim","pkScrim","prScrim","crScrim","scScrim","kitScrim","ekScrim","qkScrim","bdScrim"].forEach(id => $(id).hidden = true);
 });
 $("form").addEventListener("submit", async e => {
   e.preventDefault();
@@ -520,6 +520,7 @@ function renderEvents(){
   $("outCount").textContent = outN; $("outCount").hidden = !outN;
   $("outCount").title = "На выезде: " + outN;
   $("evAddBtn").hidden = !can("manager") || EV.missing;
+  $("quickBtn").hidden = !can("worker") || EV.missing;
   const open = EV.open ? evById(EV.open) : null;
   if(EV.open && !open && !EV.missing){ EV.open = null; if(!$("tab-events").hidden) history.replaceState(null, "", "#events"); }
   $("evBrowse").hidden = !!open; $("evDetail").hidden = !open;
@@ -583,7 +584,7 @@ function evCard(e){
   const ls = linesOf(e.id), units = ls.reduce((a, l) => a + lineQty(l, e), 0);
   const c = conflictsOf(e), s = shortagesOf(e), d = dparse(e.date_from), resp = personName(e.responsible), cr = crewOf(e.id);
   const busyN = cr.filter(x => crewBusy(x, e).length || (x.user_id && !EV.schedMissing && personIssues(x.user_id, e.date_from, e.date_to).length)).length;
-  const tags = [`<span class="chip ${evSt(e).c}">${evSt(e).t}</span>`, `<span class="cnt">${ls.length} поз. · ${units} ед.</span>`];
+  const tags = [...(e.quick ? [`<span class="chip c-off">быстрый прокат</span>`] : []), `<span class="chip ${evSt(e).c}">${evSt(e).t}</span>`, `<span class="cnt">${ls.length} поз. · ${units} ед.</span>`];
   if(c.length) tags.push(`<span class="chip c-bad">Не хватает: ${c.length} поз.</span>`);
   if(s.length) tags.push(`<span class="chip c-bad">Не вернулось: ${s.reduce((a, x) => a + x.miss, 0)} ед.</span>`);
   if(!ls.length && isActive(e)) tags.push(`<span class="chip c-warn">Оборудование не выбрано</span>`);
@@ -641,6 +642,7 @@ function renderEventDetail(e){
   const btn = (act, label, cls = "", dis = false) => `<button type="button" class="btn ${cls}" data-evact="${act}"${dis ? " disabled" : ""}>${label}</button>`;
   const acts = [];
   if(e.status === "planned" && W) acts.push(btn("load", "Отгрузить", "primary", !ls.length));
+  if(e.status === "planned" && W) acts.push(btn("build", "Собрать сканером", ls.length ? "" : "primary"));
   if(e.status === "out" && W) acts.push(btn("return", "Принять возврат", "primary"));
   if(M && (e.status === "planned" || e.status === "out")) acts.push(btn("pick", "+ Оборудование"));
   if(M && (e.status === "planned" || e.status === "out") && kits.length) acts.push(btn("kit", "+ Комплект"));
@@ -761,6 +763,7 @@ $("evDetail").addEventListener("click", async ev => {
   if(a === "pick") openPicker(e);
   if(a === "crew") openCrew(e);
   if(a === "kit") openEvKits(e);
+  if(a === "build") openBuild(e);
   if(a === "load") openProcess(e, "load");
   if(a === "return") openProcess(e, "return");
   if(a === "copy") copyEventList(e);
@@ -998,7 +1001,7 @@ $("crForm").addEventListener("submit", async ev => {
 $("evMine").addEventListener("change", () => { EV.mine = $("evMine").checked; try { localStorage.setItem("sklad.evMine", EV.mine ? "1" : "0"); } catch(_) {} renderEvents(); });
 
 document.querySelectorAll("[data-close]").forEach(b => b.onclick = () => $(b.dataset.close).hidden = true);
-["evScrim","pkScrim","prScrim","crScrim","kitScrim","ekScrim"].forEach(id => $(id).addEventListener("mousedown", e => { if(e.target === $(id)) $(id).hidden = true; }));
+["evScrim","pkScrim","prScrim","crScrim","kitScrim","ekScrim","qkScrim"].forEach(id => $(id).addEventListener("mousedown", e => { if(e.target === $(id)) $(id).hidden = true; }));
 
 // =====================================================================
 // ---------- графики сотрудников ----------
@@ -1432,6 +1435,7 @@ function scanFeedback(ok, msg){
   beep(ok);
 }
 function onScanCode(text, manual){
+  if(!$("bdScrim").hidden) return buildScan(text, manual);
   if(!PR.ev || $("prScrim").hidden) return;
   const now = Date.now();
   if(!manual && text === SCAN.last && now - SCAN.lastAt < 1600) return;
@@ -1538,7 +1542,8 @@ function renderToday(){
 
   const nothing = !leaving.length && !out.length && !alerts && !repair.length;
   $("todayView").innerHTML = `
-    <div class="thead"><h2 class="evh">${hello}, ${esc((me.full_name || "").split(" ")[0] || "коллега")}</h2><span class="muted">${fmtD(t, { weekday:"long", day:"numeric", month:"long" })}</span></div>
+    <div class="thead"><h2 class="evh">${hello}, ${esc((me.full_name || "").split(" ")[0] || "коллега")}</h2><span class="muted">${fmtD(t, { weekday:"long", day:"numeric", month:"long" })}</span>
+      ${can("worker") && !EV.missing ? `<button type="button" class="btn tquick" data-quick><svg class="ti" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg> Быстрый прокат</button>` : ""}</div>
     ${nothing ? `<div class="empty"><strong>Сегодня спокойно</strong>Выездов и возвратов нет, всё оборудование на месте.</div>` : ""}
     <div class="tgrid">
       ${card("Требует внимания", (notLoaded.length ? `<p class="hint">Дата прошла, а отгрузка не отмечена:</p>${evs(notLoaded)}` : "") + (confl.length ? `<p class="hint">Не хватает оборудования или люди заняты (ближайшие 2 недели):</p>${evs(confl)}` : ""), "alert", notLoaded.length + confl.length || null)}
@@ -1551,9 +1556,151 @@ function renderToday(){
     </div>`;
 }
 $("todayView").addEventListener("click", e => {
+  if(e.target.closest("[data-quick]")){ openQuick(); return; }
   const ev = e.target.closest("[data-ev]"); if(ev){ openEvent(+ev.dataset.ev); return; }
   const it = e.target.closest("[data-item]"); if(it){ const x = itemById(+it.dataset.item); setStockView("items"); setTab("stock"); if(x) openEditor(x); }
 });
+
+// =====================================================================
+// ---------- быстрый прокат и сборка сканером ----------
+// =====================================================================
+function openQuick(){
+  $("q_who").value = ""; $("q_phone").value = ""; $("q_note").value = "";
+  $("q_to").value = addDays(todayKey(), 1); $("q_to").min = todayKey();
+  $("qkErr").hidden = true; $("qkScrim").hidden = false; setTimeout(() => $("q_who").focus(), 30);
+}
+$("quickBtn").onclick = openQuick;
+phoneMask($("q_phone"));
+$("qkForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const err = t => { $("qkErr").textContent = t; $("qkErr").hidden = false; };
+  const who = $("q_who").value.trim(), to = $("q_to").value || todayKey();
+  if(!who) return err("Укажите, кому прокат.");
+  if(to < todayKey()) return err("Дата возврата не может быть в прошлом.");
+  const d = { title:"Прокат: " + who, date_from:todayKey(), date_to:to, client:$("q_phone").value.trim() || null,
+    note:$("q_note").value.trim() || null, responsible:me.id, quick:true };
+  $("qkSave").disabled = true;
+  let res = await sb.from("events").insert(d).select().single();
+  if(res.error && /quick/.test(res.error.message || "")){ delete d.quick; res = await sb.from("events").insert(d).select().single(); } // 06_quick.sql ещё не запущен
+  $("qkSave").disabled = false;
+  if(res.error) return err(errText(res.error));
+  const row = { status:"planned", ...res.data };
+  if(!evById(row.id)) events.push(row);
+  $("qkScrim").hidden = true;
+  openEvent(row.id); openBuild(evById(row.id));
+});
+
+const BD = { ev:null, map:new Map() };
+function openBuild(e){
+  BD.ev = e; BD.map = new Map();
+  linesOf(e.id).forEach(l => BD.map.set(l.item_id, +l.qty));
+  $("bdTitle").textContent = "Сборка: " + e.title;
+  $("bdCode").value = ""; $("bdFind").hidden = true; $("bdErr").hidden = true;
+  $("bdShip").hidden = !can("worker");
+  renderBuild(); $("bdScrim").hidden = false;
+}
+function renderBuild(hl){
+  const e = BD.ev;
+  const rows = [...BD.map].filter(([, v]) => v > 0).map(([id, v]) => ({ it:itemById(id), v })).filter(x => x.it)
+    .sort((a, b) => (a.it.place || "").localeCompare(b.it.place || "", "ru") || byName(a.it, b.it));
+  let last = null, over = 0;
+  $("bdList").innerHTML = rows.length ? rows.map(({ it, v }) => {
+    const free = freeQty(it, e.date_from, e.date_to, e.id), bad = v > free; if(bad) over++;
+    const head = it.place !== last ? `<div class="pkcat">${esc(it.place || "Без места")}</div>` : ""; last = it.place;
+    return head + `<div class="pkrow on${bad ? " bad" : ""}${it.id === hl ? " flash" : ""}" data-bd="${it.id}">
+      <div class="lname">${esc(it.name)}${it.maker ? ` <span class="maker">${esc(it.maker)}</span>` : ""}<div class="sub mono">${itemCode(it.id)}</div></div>
+      <div class="pkfree ${bad ? "neg" : ""}">свободно <b>${Math.max(0, free)}</b> из ${num(it.qty_fact) || 0}${bad ? `<span class="neg">больше, чем свободно</span>` : ""}</div>
+      <span class="qtyBox sm"><button type="button" data-ba="dec" aria-label="Меньше">−</button><input type="number" min="0" inputmode="numeric" value="${v}" data-ba="qty" aria-label="Количество"><button type="button" data-ba="inc" aria-label="Больше">+</button></span>
+    </div>`;
+  }).join("") : `<div class="empty" style="border:0"><strong>Сумка пока пустая</strong>Нажмите «Сканировать» и наводите камеру на наклейки — или впишите код либо название выше.</div>`;
+  let u = 0; rows.forEach(x => u += x.v);
+  $("bdSum").textContent = `${rows.length} поз. · ${u} ед.` + (over ? ` · не хватает: ${over}` : "");
+  $("bdShip").disabled = $("bdSave").disabled = false;
+  if(hl){ const r = $("bdList").querySelector(`[data-bd="${hl}"]`); if(r) r.scrollIntoView({ block:"nearest" }); }
+}
+function buildAdd(itemId, n){
+  const it = itemById(itemId); if(!it) return false;
+  const v = Math.max(0, (BD.map.get(itemId) || 0) + n); BD.map.set(itemId, v); renderBuild(itemId); return v;
+}
+function buildScan(text, manual){
+  const now = Date.now();
+  if(!manual && text === SCAN.last && now - SCAN.lastAt < 1600) return;
+  SCAN.last = text; SCAN.lastAt = now;
+  const c = parseCode(text);
+  if(!c) return scanFeedback(false, "Это не наклейка склада");
+  if(c.kind === "i"){
+    const it = itemById(c.id); if(!it) return scanFeedback(false, "Позиция не найдена");
+    if(it.state === "Списано") return scanFeedback(false, `«${it.name}» списан`);
+    const v = buildAdd(c.id, 1), free = freeQty(it, BD.ev.date_from, BD.ev.date_to, BD.ev.id);
+    return scanFeedback(true, `${it.name}: ${v}` + (v > free ? ` — свободно только ${Math.max(0, free)}` : ""));
+  }
+  const k = kitById(c.id); if(!k) return scanFeedback(false, "Комплект не найден");
+  kitLines(k.id).forEach(x => BD.map.set(x.item_id, (BD.map.get(x.item_id) || 0) + +x.qty));
+  renderBuild(); scanFeedback(true, `Комплект «${k.name}»: +${kitLines(k.id).length} поз.`);
+}
+$("bdList").addEventListener("click", e => {
+  const b = e.target.closest("button[data-ba]"); if(!b) return;
+  buildAdd(+b.closest("[data-bd]").dataset.bd, b.dataset.ba === "inc" ? 1 : -1);
+});
+$("bdList").addEventListener("change", e => {
+  if(e.target.dataset.ba !== "qty") return;
+  const id = +e.target.closest("[data-bd]").dataset.bd; BD.map.set(id, Math.max(0, Math.round(num(e.target.value) || 0))); renderBuild();
+});
+// Поле «код или название»: код — сразу +1, текст — подсказки.
+$("bdCode").addEventListener("input", () => {
+  const q = $("bdCode").value.trim().toLowerCase();
+  if(q.length < 2 || parseCode(q)){ $("bdFind").hidden = true; return; }
+  const words = q.split(/\s+/).filter(Boolean);
+  const found = items.filter(i => { if(i.state === "Списано") return false; const h = [i.name, i.maker, i.model, i.place].join(" ").toLowerCase(); return words.every(w => h.includes(w)); }).sort(byName).slice(0, 8);
+  $("bdFind").innerHTML = found.length ? found.map(i => `<button type="button" class="bdhit" data-bdadd="${i.id}"><span>${esc(i.name)}${i.maker ? ` <span class="maker">${esc(i.maker)}</span>` : ""}</span><small>${esc(i.place || "")}</small><b>+1</b></button>`).join("") : `<p class="hint" style="padding:8px 12px">Ничего не найдено</p>`;
+  $("bdFind").hidden = false;
+});
+$("bdFind").addEventListener("click", e => {
+  const b = e.target.closest("[data-bdadd]"); if(!b) return;
+  const id = +b.dataset.bdadd, v = buildAdd(id, 1); toast(`${itemById(id).name}: ${v}`);
+});
+$("bdCodeForm").addEventListener("submit", e => {
+  e.preventDefault();
+  const v = $("bdCode").value.trim(); if(!v) return;
+  if(parseCode(v)){ $("bdCode").value = ""; $("bdFind").hidden = true; buildScan(v, true); return; }
+  const first = $("bdFind").querySelector("[data-bdadd]"); if(first) first.click();
+});
+function mountScanner(afterEl){ if($("scanBox").previousElementSibling !== afterEl) afterEl.after($("scanBox")); }
+$("bdScan").onclick = () => { if(SCAN.stream) return stopScan(); mountScanner($("bdTools")); startScan(); };
+const _prScanOrig = $("prScan").onclick;
+$("prScan").onclick = () => { mountScanner(document.querySelector("#prScrim .prTools")); _prScanOrig(); };
+const _prZeroOrig = $("prZero").onclick;
+$("prZero").onclick = () => { mountScanner(document.querySelector("#prScrim .prTools")); _prZeroOrig(); };
+function closeBuild(){ stopScan(); $("bdScrim").hidden = true; }
+$("bdCancel").onclick = closeBuild;
+$("bdScrim").addEventListener("mousedown", e => { if(e.target === $("bdScrim")) closeBuild(); });
+
+async function saveBuild(ship){
+  const e = BD.ev, cur = linesOf(e.id), err = t => { $("bdErr").textContent = t; $("bdErr").hidden = false; };
+  const ins = [], upd = [], del = [];
+  BD.map.forEach((v, itemId) => { const l = cur.find(x => x.item_id === itemId);
+    if(v > 0 && !l) ins.push({ event_id:e.id, item_id:itemId, qty:v });
+    else if(v > 0 && l && +l.qty !== v) upd.push([l, v]);
+    else if(v <= 0 && l) del.push(l.id); });
+  cur.forEach(l => { if(!BD.map.has(l.item_id)) del.push(l.id); });
+  if(ship && ![...BD.map.values()].some(v => v > 0)) return err("Сумка пустая — отсканируйте или добавьте оборудование.");
+  $("bdShip").disabled = $("bdSave").disabled = true;
+  try {
+    if(ins.length){ const r = await sb.from("event_items").insert(ins).select(); if(r.error) throw r.error; (r.data || []).forEach(x => { if(!lines.find(y => y.id === x.id)) lines.push(x); }); }
+    for(const [l, v] of upd){ const r = await sb.from("event_items").update({ qty:v }).eq("id", l.id); if(r.error) throw r.error; l.qty = v; }
+    if(del.length){ const r = await sb.from("event_items").delete().in("id", del); if(r.error) throw r.error; lines = lines.filter(x => !del.includes(x.id)); }
+    if(ship){
+      const res = await Promise.all(linesOf(e.id).map(l => sb.from("event_items").update({ qty_out:+l.qty }).eq("id", l.id)));
+      const bad = res.find(r => r.error); if(bad) throw bad.error;
+      linesOf(e.id).forEach(l => l.qty_out = +l.qty);
+      if(!await setEvStatus(e, "out")) throw new Error("Не удалось отметить отгрузку");
+    }
+    closeBuild(); renderEvents(); renderStock();
+    toast(ship ? "Отгружено — прокат на выезде" : "Список сохранён");
+  } catch(ex){ err(errText(ex)); $("bdShip").disabled = $("bdSave").disabled = false; }
+}
+$("bdShip").onclick = () => saveBuild(true);
+$("bdSave").onclick = () => saveBuild(false);
 
 // ---------- журнал: записи о мероприятиях ----------
 function evVal(k, v){

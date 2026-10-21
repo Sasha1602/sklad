@@ -8,7 +8,7 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2316191d'/%3E%3Cpath d='M-4 20 20-4M2 26 26 2M8 32 32 8M14 38 38 14' stroke='%23f2a900' stroke-width='4'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&family=Unbounded:wght@600&display=swap">
-<link rel="stylesheet" href="style.css?v=2026-10-21-kits">
+<link rel="stylesheet" href="style.css?v=2026-10-21-quick">
 </head>
 <body>
 
@@ -155,6 +155,7 @@
           </div>
           <label class="check"><input type="checkbox" id="evMine"> только мои</label>
           <span class="sp"></span>
+          <button class="btn" type="button" id="quickBtn" hidden><svg class="ti" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg> Быстрый прокат</button>
           <button class="btn primary" type="button" id="evAddBtn">+ Мероприятие</button>
         </div>
         <div id="calWrap">
@@ -352,6 +353,46 @@
     <div class="msg" id="ekErr" hidden></div>
     <div class="actions">
       <button type="button" class="btn" data-close="ekScrim">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ Быстрый прокат ============ -->
+<div class="scrim" id="qkScrim" hidden>
+  <form class="sheet" id="qkForm" novalidate>
+    <h3 class="h2">Быстрый прокат</h3>
+    <p class="hint">Сумка с коммутацией, пара приборов на вечер. После создания сразу откроется сборка сканером.</p>
+    <div class="grid" style="margin-top:12px">
+      <label class="full">Кому<input id="q_who" class="field" placeholder="Петров, банкет в «Праге»" autocomplete="off" required></label>
+      <label>Телефон<input id="q_phone" class="field" type="tel" placeholder="+7 (900) 000-00-00" autocomplete="off"></label>
+      <label>Вернут<input id="q_to" class="field" type="date"></label>
+      <label class="full">Примечание<input id="q_note" class="field" placeholder="Заберут сами в 18:00"></label>
+    </div>
+    <div class="msg" id="qkErr" hidden></div>
+    <div class="actions">
+      <button type="submit" class="btn primary" id="qkSave">Создать и собрать</button>
+      <button type="button" class="btn" data-close="qkScrim">Отмена</button>
+    </div>
+  </form>
+</div>
+
+<!-- ============ Сборка сканером ============ -->
+<div class="scrim" id="bdScrim" hidden>
+  <div class="sheet wide">
+    <h3 class="h2" id="bdTitle">Сборка</h3>
+    <p class="hint" id="bdHint">Сканируйте наклейки — каждая добавляет позицию в список. Наклейка комплекта добавляет весь его состав.</p>
+    <div class="prTools" id="bdTools">
+      <button type="button" class="btn" id="bdScan"><svg class="ti" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg> Сканировать</button>
+      <form id="bdCodeForm" class="prcode"><input id="bdCode" class="field" placeholder="Код: I-12 или название" autocomplete="off"><button class="btn" type="submit">+1</button></form>
+    </div>
+    <div class="bdfind" id="bdFind" hidden></div>
+    <div class="pkList" id="bdList"></div>
+    <div class="msg" id="bdErr" hidden></div>
+    <div class="actions">
+      <button type="button" class="btn primary" id="bdShip">Отгрузить</button>
+      <button type="button" class="btn" id="bdSave">Сохранить, отгружу позже</button>
+      <button type="button" class="btn ghost" id="bdCancel">Отмена</button>
+      <span class="sp"></span><span class="hint" id="bdSum"></span>
     </div>
   </div>
 </div>
