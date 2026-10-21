@@ -619,3 +619,15 @@ table.av{border-collapse:collapse;font-size:12.5px;width:100%;font-variant-numer
 .keys pre{white-space:pre-wrap;word-break:break-all;background:var(--surface-2);border-radius:6px;padding:8px 10px;font-family:var(--f-mono);font-size:12.5px;user-select:all}
 #pushSetup .btn{margin-top:8px}
 @media (display-mode: standalone){ .bar{padding-top:0} }
+
+/* недостачи и проверка кейса */
+.banner.losses{display:flex;flex-direction:column;gap:8px}
+.lossrow{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;justify-content:space-between;background:var(--surface);color:var(--fg);border-radius:8px;padding:8px 10px}
+.lossname{min-width:0;overflow-wrap:anywhere}
+.lossacts{display:flex;gap:6px;align-items:center}
+.lossacts .btn.sm{margin-left:0}
+.lossn{width:64px;min-height:30px;padding:4px 8px}
+.kitcheck{margin-top:10px;border:2px solid var(--accent);border-radius:var(--r);overflow:hidden;background:var(--surface)}
+.kchead{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline;padding:10px 12px;background:var(--accent-soft)}
+.kcacts{display:flex;gap:8px;justify-content:flex-end;padding:10px 12px;flex-wrap:wrap}
+.kitcheck .qtyBox input{pointer-events:none}
