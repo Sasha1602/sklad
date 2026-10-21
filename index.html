@@ -8,7 +8,7 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2316191d'/%3E%3Cpath d='M-4 20 20-4M2 26 26 2M8 32 32 8M14 38 38 14' stroke='%23f2a900' stroke-width='4'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&family=Unbounded:wght@600&display=swap">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=2026-10-21-crew">
 </head>
 <body>
 
@@ -113,6 +113,7 @@
             <button type="button" class="btn ghost icon" id="mNext" aria-label="Следующий месяц">›</button>
             <button type="button" class="btn ghost" id="mToday">Сегодня</button>
           </div>
+          <label class="check"><input type="checkbox" id="evMine"> только мои</label>
           <span class="sp"></span>
           <button class="btn primary" type="button" id="evAddBtn">+ Мероприятие</button>
         </div>
@@ -141,7 +142,7 @@
           <dt><span class="role r-pending">Ожидает</span></dt><dd>Зарегистрировался, но ничего не видит, пока вы не назначите роль.</dd>
           <dt><span class="role r-viewer">Просмотр</span></dt><dd>Видит склад, мероприятия и журнал, ничего не меняет.</dd>
           <dt><span class="role r-worker">Кладовщик</span></dt><dd>Меняет количество, состояние, статус и примечание. Отгружает оборудование на мероприятия и принимает возврат. Не добавляет и не удаляет позиции и мероприятия.</dd>
-          <dt><span class="role r-manager">Менеджер</span></dt><dd>Полный доступ к оборудованию и мероприятиям: создаёт, редактирует, бронирует, удаляет.</dd>
+          <dt><span class="role r-manager">Менеджер</span></dt><dd>Полный доступ к оборудованию и мероприятиям: создаёт, редактирует, бронирует, назначает команду, удаляет.</dd>
           <dt><span class="role r-admin">Администратор</span></dt><dd>Всё, что менеджер, плюс назначает роли пользователям.</dd>
         </dl>
         <p class="hint">Права проверяет сама база, поэтому обойти их через браузер нельзя. Свою роль администратор поменять не может, а последнего администратора нельзя понизить.</p>
@@ -202,6 +203,31 @@
     </div>
   </form>
 </div>
+
+<!-- ============ Человек в команду ============ -->
+<div class="scrim" id="crScrim" hidden>
+  <form class="sheet" id="crForm" novalidate>
+    <h3 class="h2">Добавить в команду</h3>
+    <p class="hint" id="crHint"></p>
+    <div class="tabs small" role="tablist" style="margin:12px 0">
+      <button type="button" class="tab active" data-crmode="staff">Сотрудник</button>
+      <button type="button" class="tab" data-crmode="ext">Без аккаунта</button>
+    </div>
+    <div class="grid">
+      <label class="full" id="crStaffWrap">Сотрудник<select id="c_user" class="field"></select></label>
+      <label id="crNameWrap" hidden>Имя<input id="c_name" class="field" placeholder="Вася Петров" autocomplete="off"></label>
+      <label id="crPhoneWrap" hidden>Телефон<input id="c_phone" class="field" type="tel" placeholder="+7 900 000-00-00" autocomplete="off"></label>
+      <label class="full">Роль на выезде<input id="c_job" class="field" list="jobList" placeholder="Свет, звук, водитель…"></label>
+      <label class="full">Примечание<input id="c_note" class="field" placeholder="Приезжает к 14:00, едет на своей машине…"></label>
+    </div>
+    <div class="msg" id="crErr" hidden></div>
+    <div class="actions">
+      <button type="submit" class="btn primary" id="crSave">Добавить</button>
+      <button type="button" class="btn" data-close="crScrim">Отмена</button>
+    </div>
+  </form>
+</div>
+<datalist id="jobList"><option value="Свет"><option value="Звук"><option value="Видео"><option value="Техник"><option value="Монтаж"><option value="Водитель"><option value="Грузчик"><option value="DJ"></datalist>
 
 <!-- ============ Подбор оборудования ============ -->
 <div class="scrim" id="pkScrim" hidden>

@@ -294,3 +294,21 @@ select.chip:disabled{cursor:default;opacity:1}
 .prTools{margin-top:8px}
 
 .lname .sub{font-weight:400}
+
+/* команда */
+.btn.sm{min-height:30px;padding:4px 10px;font-size:13px;margin-left:auto}
+.group.crew{margin-bottom:14px}
+.group.crew .ghead{align-items:center}
+.crow{display:grid;grid-template-columns:minmax(0,1fr) 180px 40px;gap:12px;align-items:center;padding:9px 14px;border-top:1px solid var(--line)}
+.ghead+.crow{border-top:0}
+.crow.bad{background:var(--bad-bg)}
+.cwho{min-width:0;overflow-wrap:anywhere}
+.cwho .job{display:inline-block;font-size:12px;font-weight:600;color:var(--info);background:var(--info-bg);border-radius:4px;padding:1px 7px;margin-left:6px}
+.cwarn{font-size:12.5px;margin-top:3px}
+.cwarn a{color:inherit;font-weight:600}
+.cphone{font-family:var(--f-mono);font-size:13.5px}
+.cphone a{color:var(--fg)}
+.crempty{padding:10px 14px}
+.evcrew{font-size:12.5px;color:var(--fg);opacity:.85;overflow-wrap:anywhere}
+.edit.armed{background:var(--bad);color:var(--surface)}
+@media (max-width:560px){.crow{grid-template-columns:minmax(0,1fr) 36px}.crow .cphone{grid-column:1;grid-row:2}.crow .lx{grid-column:2;grid-row:1}}

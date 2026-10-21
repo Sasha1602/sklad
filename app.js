@@ -54,7 +54,7 @@ if(window.SKLAD_LIB_FAILED || !window.supabase){
 }
 const sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_KEY, { auth:{ persistSession:true, autoRefreshToken:true, detectSessionInUrl:true } });
 
-let me = null, items = [], profiles = {}, logRows = [], events = [], lines = [], channel = null, started = false, recovering = false;
+let me = null, items = [], profiles = {}, logRows = [], events = [], lines = [], crew = [], channel = null, started = false, recovering = false;
 
 opts($("fCat"), CATS, true); opts($("fState"), Object.keys(STATES), true); opts($("fStatus"), Object.keys(STATUSES), true);
 opts($("e_category"), CATS); opts($("e_state"), Object.keys(STATES)); opts($("e_status"), Object.keys(STATUSES)); opts($("e_unit"), UNITS);
@@ -132,17 +132,19 @@ async function startApp(){
   $("usersTab").hidden = !can("admin");
   $("addBtn").hidden = !can("manager");
 
-  const [it, pr, lg, ev, el] = await Promise.all([
+  const [it, pr, lg, ev, el, cr] = await Promise.all([
     sb.from("items").select("*").order("id"),
     sb.from("profiles").select("*").order("created_at"),
     sb.from("item_log").select("*").order("created_at", { ascending:false }).limit(300),
     sb.from("events").select("*").order("date_from"),
-    sb.from("event_items").select("*").order("id")
+    sb.from("event_items").select("*").order("id"),
+    sb.from("event_crew").select("*").order("id")
   ]);
   if(it.error){ toast(errText(it.error)); }
   items = it.data || []; logRows = lg.data || [];
   (pr.data || []).forEach(p => profiles[p.id] = p);
   if(ev.error || el.error){ EV.missing = true; } else { events = ev.data || []; lines = el.data || []; }
+  if(cr.error){ EV.crewMissing = true; } else crew = cr.data || [];
   renderStock(); renderLog(); renderUsers(); renderEvents();
   subscribe();
   const h = location.hash.slice(1);
@@ -171,6 +173,9 @@ function subscribe(){
     })
     .on("postgres_changes", { event:"*", schema:"public", table:"event_items" }, p => {
       lines = upsertRow(lines, p); renderEvents(); renderStock();
+    })
+    .on("postgres_changes", { event:"*", schema:"public", table:"event_crew" }, p => {
+      crew = upsertRow(crew, p); renderEvents();
     })
     .on("postgres_changes", { event:"INSERT", schema:"public", table:"item_log" }, p => {
       logRows.unshift(p.new); logRows = logRows.slice(0, 300); renderLog();
@@ -302,7 +307,7 @@ $("scrim").addEventListener("mousedown", e => { if(e.target === $("scrim")) clos
 document.addEventListener("keydown", e => {
   if(e.key !== "Escape") return;
   if(!$("scrim").hidden) closeEditor();
-  ["evScrim","pkScrim","prScrim"].forEach(id => $(id).hidden = true);
+  ["evScrim","pkScrim","prScrim","crScrim"].forEach(id => $(id).hidden = true);
 });
 $("form").addEventListener("submit", async e => {
   e.preventDefault();
@@ -331,11 +336,11 @@ const fmt = v => v == null || v === "" ? "—" : String(v);
 function renderLog(){
   const q = $("logQ").value.trim().toLowerCase();
   const name = id => profiles[id] ? (profiles[id].full_name || profiles[id].email) : (id ? "удалённый пользователь" : "система");
-  const rows = logRows.filter(r => !q || [r.item_name, name(r.user_id), r.changes && r.changes._item].join(" ").toLowerCase().includes(q));
+  const rows = logRows.filter(r => !q || [r.item_name, name(r.user_id), r.changes && r.changes._item, r.changes && r.changes._who].join(" ").toLowerCase().includes(q));
   if(!rows.length){ $("logList").innerHTML = `<div class="empty" style="border:0">${q ? "Нет записей по этому запросу." : "Изменений пока не было. Здесь появится каждое изменение на складе."}</div>`; return; }
   const ACT = { insert:"добавил(а)", update:"изменил(а)", delete:"удалил(а)" };
   $("logList").innerHTML = rows.map(r => {
-    if(r.kind === "event" || r.kind === "event_line") return logEventHtml(r, name);
+    if(r.kind === "event" || r.kind === "event_line" || r.kind === "event_crew") return logEventHtml(r, name);
     const ch = r.changes ? Object.entries(r.changes).filter(([k]) => FIELDS[k]).map(([k,[a,b]]) => `<li>${FIELDS[k]}: ${esc(fmt(a))} → <b>${esc(fmt(b))}</b></li>`).join("") : "";
     const t = new Date(r.created_at);
     return `<div class="ev"><time datetime="${esc(r.created_at)}" title="${t.toLocaleString("ru-RU")}">${t.toLocaleDateString("ru-RU",{day:"2-digit",month:"2-digit"})} ${t.toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"})}</time>
@@ -391,7 +396,7 @@ const EV_ST = {
 const evSt = e => EV_ST[e.status] || EV_ST.planned;
 const EV_FIELDS = { title:"Название", venue:"Площадка", client:"Заказчик", date_from:"Начало", date_to:"Окончание", responsible:"Ответственный", status:"Статус", note:"Примечание" };
 const MONTHS = ["Январь","Февраль","Март","Апрель","Май","Июнь","Июль","Август","Сентябрь","Октябрь","Ноябрь","Декабрь"];
-const EV = { view:"cal", month:new Date(new Date().getFullYear(), new Date().getMonth(), 1), sel:null, open:null, missing:false };
+const EV = { view:"cal", month:new Date(new Date().getFullYear(), new Date().getMonth(), 1), sel:null, open:null, missing:false, crewMissing:false, mine:false };
 
 const pad = n => String(n).padStart(2, "0");
 const dkey = d => d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
@@ -447,6 +452,18 @@ function shortagesOf(e){
   }).filter(Boolean);
 }
 
+// ---------- команда ----------
+const crewOf = evId => crew.filter(c => c.event_id === evId);
+const crewName = c => c.user_id ? (personName(c.user_id) || c.name || "Сотрудник") : (c.name || "Без имени");
+const crewKey = c => c.user_id ? "u:" + c.user_id : "n:" + String(c.name || "").trim().toLowerCase();
+function crewBusy(c, e){
+  const key = crewKey(c);
+  return events.filter(o => o.id !== e.id && isActive(o) && o.date_from <= e.date_to && o.date_to >= e.date_from && crewOf(o.id).some(x => crewKey(x) === key));
+}
+const isMine = e => e.responsible === me.id || crewOf(e.id).some(c => c.user_id === me.id);
+const evVisible = e => !EV.mine || isMine(e);
+try { EV.mine = localStorage.getItem("sklad.evMine") === "1"; } catch(_) {}
+
 // ---------- обзор ----------
 function renderEvents(){
   if(!me) return;
@@ -464,6 +481,7 @@ function renderEvents(){
     return;
   }
   document.querySelectorAll("[data-evview]").forEach(b => b.classList.toggle("active", b.dataset.evview === EV.view));
+  $("evMine").checked = EV.mine;
   $("calWrap").hidden = EV.view !== "cal"; $("monthNav").hidden = EV.view !== "cal"; $("evList").hidden = EV.view !== "list";
   EV.view === "cal" ? renderCal() : renderEvList();
 }
@@ -475,7 +493,7 @@ function renderCal(){
   const days = new Date(y, mo + 1, 0).getDate();
   const cells = Math.ceil((shift + days) / 7) * 7;
   const t = todayKey();
-  const vis = events.filter(e => e.status !== "cancelled");
+  const vis = events.filter(e => e.status !== "cancelled" && evVisible(e));
   let h = ["Пн","Вт","Ср","Чт","Пт","Сб","Вс"].map((d, i) => `<div class="cal-h${i > 4 ? " we" : ""}">${d}</div>`).join("");
   for(let i = 0; i < cells; i++){
     const d = new Date(y, mo, 1 - shift + i), k = dkey(d);
@@ -499,31 +517,34 @@ function renderCal(){
 
 function renderDayPanel(){
   const k = EV.sel;
-  const evs = events.filter(e => e.date_from <= k && e.date_to >= k).sort((a, b) => a.date_from.localeCompare(b.date_from));
+  const evs = events.filter(e => e.date_from <= k && e.date_to >= k && evVisible(e)).sort((a, b) => a.date_from.localeCompare(b.date_from));
   $("dayPanel").innerHTML = `<div class="dp-head"><h3>${fmtD(k, { weekday:"long", day:"numeric", month:"long" })}</h3>${can("manager") ? `<button class="btn" type="button" data-newev="${k}">+ Мероприятие на этот день</button>` : ""}</div>`
     + (evs.length ? `<div class="evcards">${evs.map(evCard).join("")}</div>` : `<p class="hint">В этот день мероприятий нет${can("manager") ? " — можно создать новое" : ""}.</p>`);
 }
 
 function evCard(e){
   const ls = linesOf(e.id), units = ls.reduce((a, l) => a + lineQty(l, e), 0);
-  const c = conflictsOf(e), s = shortagesOf(e), d = dparse(e.date_from), resp = personName(e.responsible);
+  const c = conflictsOf(e), s = shortagesOf(e), d = dparse(e.date_from), resp = personName(e.responsible), cr = crewOf(e.id);
+  const busyN = cr.filter(x => crewBusy(x, e).length).length;
   const tags = [`<span class="chip ${evSt(e).c}">${evSt(e).t}</span>`, `<span class="cnt">${ls.length} поз. · ${units} ед.</span>`];
   if(c.length) tags.push(`<span class="chip c-bad">Не хватает: ${c.length} поз.</span>`);
   if(s.length) tags.push(`<span class="chip c-bad">Не вернулось: ${s.reduce((a, x) => a + x.miss, 0)} ед.</span>`);
   if(!ls.length && isActive(e)) tags.push(`<span class="chip c-warn">Оборудование не выбрано</span>`);
+  if(busyN && isActive(e)) tags.push(`<span class="chip c-bad">Люди заняты: ${busyN}</span>`);
   return `<button type="button" class="evcard st-${e.status}" data-ev="${e.id}">
     <span class="evdate"><b>${d.getDate()}</b><small>${d.toLocaleDateString("ru-RU", { month:"short" }).replace(/\./g, "")}</small></span>
     <span class="evbody"><span class="evtitle">${esc(e.title)}</span>
-      <span class="evmeta">${esc(fmtRange(e))}${e.venue ? " · " + esc(e.venue) : ""}${resp ? " · " + esc(resp) : ""}</span>
+      <span class="evmeta">${esc(fmtRange(e))}${e.venue ? " · " + esc(e.venue) : ""}${resp ? " · отв. " + esc(resp) : ""}</span>
+      ${cr.length ? `<span class="evcrew">Едут: ${esc(cr.slice(0, 4).map(crewName).join(", "))}${cr.length > 4 ? " и ещё " + (cr.length - 4) : ""}</span>` : ""}
       <span class="evtags">${tags.join("")}</span></span>
   </button>`;
 }
 
 function renderEvList(){
-  const t = todayKey();
-  const overdue = events.filter(e => e.status === "planned" && e.date_to < t).sort((a, b) => a.date_from.localeCompare(b.date_from));
-  const up = events.filter(e => e.status === "out" || (e.status === "planned" && e.date_to >= t)).sort((a, b) => a.date_from.localeCompare(b.date_from));
-  const past = events.filter(e => e.status === "returned" || e.status === "cancelled").sort((a, b) => b.date_from.localeCompare(a.date_from)).slice(0, 40);
+  const t = todayKey(), evs = events.filter(evVisible);
+  const overdue = evs.filter(e => e.status === "planned" && e.date_to < t).sort((a, b) => a.date_from.localeCompare(b.date_from));
+  const up = evs.filter(e => e.status === "out" || (e.status === "planned" && e.date_to >= t)).sort((a, b) => a.date_from.localeCompare(b.date_from));
+  const past = evs.filter(e => e.status === "returned" || e.status === "cancelled").sort((a, b) => b.date_from.localeCompare(a.date_from)).slice(0, 40);
   let h = "";
   if(overdue.length) h += `<h3 class="sect bad">Дата прошла, но не отгружено</h3><p class="hint">Отметьте отгрузку и возврат или отмените — иначе оборудование числится забронированным.</p><div class="evcards">${overdue.map(evCard).join("")}</div>`;
   h += `<h3 class="sect">Ближайшие и на выезде</h3>` + (up.length ? `<div class="evcards">${up.map(evCard).join("")}</div>` : `<div class="empty"><strong>Впереди мероприятий нет</strong>${can("manager") ? "Нажмите «+ Мероприятие», чтобы забронировать оборудование." : "Менеджер ещё не запланировал мероприятия."}</div>`);
@@ -617,15 +638,43 @@ function renderEventDetail(e){
       <span class="chip lg ${evSt(e).c}">${evSt(e).t}</span>
     </div>
     <div class="actions evacts">${acts.join("")}</div>
+    ${crewSection(e)}
     ${banner}
     ${ls.length ? `<div class="lhead"><span>Позиция</span><span>${colsHead[0]}</span><span>${colsHead[1]}</span><span></span></div>${body}`
       : `<div class="empty"><strong>Оборудование ещё не выбрано</strong>${M && isActive(e) ? `<button type="button" class="btn primary" data-evact="pick" style="margin-top:12px">+ Добавить оборудование</button>` : ""}</div>`}`;
+}
+
+function crewSection(e){
+  if(EV.crewMissing) return can("admin") ? `<div class="banner warn">Чтобы добавлять людей на выезд, выполните в Supabase файл <code>supabase/03_crew.sql</code>.</div>` : "";
+  const M = can("manager"), cr = crewOf(e.id).sort((a, b) => (a.job || "я").localeCompare(b.job || "я", "ru") || crewName(a).localeCompare(crewName(b), "ru"));
+  const rows = cr.map(c => {
+    const busy = isActive(e) ? crewBusy(c, e) : [];
+    const ph = c.phone || "";
+    return `<div class="crow${busy.length ? " bad" : ""}" data-crew="${c.id}">
+      <div class="cwho"><b>${esc(crewName(c))}</b>${c.user_id === me.id ? ` <span class="chip xs c-info">вы</span>` : ""}${c.job ? ` <span class="job">${esc(c.job)}</span>` : ""}
+        ${c.note ? `<div class="sub">${esc(c.note)}</div>` : ""}
+        ${busy.length ? `<div class="neg cwarn">В эти даты также на ${busy.map(o => `<a href="#ev-${o.id}" data-ev="${o.id}">«${esc(o.title)}»</a>`).join(", ")}</div>` : ""}</div>
+      <div class="cphone">${ph ? `<a href="tel:${esc(ph.replace(/[^+\d]/g, ""))}">${esc(ph)}</a>` : ""}</div>
+      <div class="lx">${M ? `<button type="button" class="edit" data-crdel="${c.id}" aria-label="Убрать из команды" title="Убрать из команды">✕</button>` : ""}</div>
+    </div>`;
+  }).join("");
+  return `<section class="group crew"><div class="ghead"><h2>Команда</h2><small>${cr.length ? cr.length + " чел." : "никто не назначен"}</small>
+    ${M && e.status !== "cancelled" ? `<button type="button" class="btn sm" data-evact="crew">+ Человек</button>` : ""}</div>
+    ${rows || `<p class="hint crempty">${M ? "Добавьте, кто едет на мероприятие: техников, водителя, грузчиков." : "Команда пока не назначена."}</p>`}</section>`;
 }
 
 // действия в карточке
 $("evDetail").addEventListener("click", async ev => {
   const lk = ev.target.closest("a[data-ev]"); if(lk){ ev.preventDefault(); openEvent(+lk.dataset.ev); return; }
   const e = evById(EV.open); if(!e) return;
+  const cd = ev.target.closest("[data-crdel]");
+  if(cd){
+    const id = +cd.dataset.crdel;
+    if(!cd.classList.contains("armed")){ cd.classList.add("armed"); cd.title = "Нажмите ещё раз, чтобы убрать"; cd.textContent = "?"; setTimeout(() => { if(cd.isConnected){ cd.classList.remove("armed"); cd.textContent = "✕"; } }, 3000); return; }
+    const { error } = await sb.from("event_crew").delete().eq("id", id);
+    if(error){ toast(errText(error)); return; }
+    crew = crew.filter(c => c.id !== id); renderEvents(); toast("Убран(а) из команды"); return;
+  }
   const lb = ev.target.closest("[data-lact]");
   if(lb && lb.tagName === "BUTTON"){
     const l = lines.find(x => x.id === +lb.closest("[data-line]").dataset.line); if(!l) return;
@@ -642,6 +691,7 @@ $("evDetail").addEventListener("click", async ev => {
   if(a === "back") closeEvent();
   if(a === "edit") openEvForm(e);
   if(a === "pick") openPicker(e);
+  if(a === "crew") openCrew(e);
   if(a === "load") openProcess(e, "load");
   if(a === "return") openProcess(e, "return");
   if(a === "copy") copyEventList(e);
@@ -652,7 +702,7 @@ $("evDetail").addEventListener("click", async ev => {
     if(!b.classList.contains("armed")){ b.classList.add("armed"); b.textContent = "Точно удалить?"; return; }
     const { error } = await sb.from("events").delete().eq("id", e.id);
     if(error){ toast(errText(error)); return; }
-    events = events.filter(x => x.id !== e.id); lines = lines.filter(x => x.event_id !== e.id);
+    events = events.filter(x => x.id !== e.id); lines = lines.filter(x => x.event_id !== e.id); crew = crew.filter(x => x.event_id !== e.id);
     toast("Мероприятие удалено"); closeEvent(); renderStock();
   }
 });
@@ -678,6 +728,8 @@ async function copyEventList(e){
   const groups = {};
   linesOf(e.id).forEach(l => { const it = itemById(l.item_id); if(it) (groups[it.place || "Без места"] ??= []).push([it, lineQty(l, e)]); });
   let t = `${e.title} — ${fmtRange(e)}` + (e.venue ? `\nПлощадка: ${e.venue}` : "") + (personName(e.responsible) ? `\nОтветственный: ${personName(e.responsible)}` : "");
+  const cr = crewOf(e.id);
+  if(cr.length) t += `\n\nКоманда:` + cr.map(c => `\n— ${crewName(c)}${c.job ? " (" + c.job + ")" : ""}${c.phone ? ", " + c.phone : ""}`).join("");
   Object.keys(groups).sort((a, b) => a.localeCompare(b, "ru")).forEach(p => {
     t += `\n\n${p}:`;
     groups[p].sort((a, b) => a[0].name.localeCompare(b[0].name, "ru", { numeric:true })).forEach(([it, q]) => t += `\n— ${it.name}${it.maker ? " " + it.maker : ""} × ${q}`);
@@ -837,8 +889,45 @@ $("prSave").onclick = async () => {
   else { const s = shortagesOf(e); toast(s.length ? `Возврат принят. Не вернулось: ${s.reduce((a, x) => a + x.miss, 0)} ед.` : "Возврат принят — всё на месте"); }
 };
 
+// ---------- добавить человека ----------
+const CR = { ev:null, mode:"staff" };
+function crMode(m){
+  CR.mode = m;
+  document.querySelectorAll("[data-crmode]").forEach(b => b.classList.toggle("active", b.dataset.crmode === m));
+  $("crStaffWrap").hidden = m !== "staff"; $("crNameWrap").hidden = m !== "ext"; $("crPhoneWrap").hidden = m !== "ext";
+}
+document.querySelectorAll("[data-crmode]").forEach(b => b.onclick = () => crMode(b.dataset.crmode));
+function openCrew(e){
+  CR.ev = e;
+  const taken = new Set(crewOf(e.id).filter(c => c.user_id).map(c => c.user_id));
+  const staff = Object.values(profiles).filter(p => LV[p.role] >= LV.viewer && !taken.has(p.id)).sort((a, b) => (a.full_name || "").localeCompare(b.full_name || "", "ru"));
+  $("c_user").innerHTML = staff.length ? staff.map(p => {
+    const busy = crewBusy({ user_id:p.id }, e);
+    return `<option value="${p.id}">${esc(p.full_name || p.email)}${busy.length ? " — занят: «" + esc(busy[0].title) + "»" : ""}</option>`;
+  }).join("") : `<option value="">Все сотрудники уже в команде</option>`;
+  ["c_name","c_phone","c_job","c_note"].forEach(id => $(id).value = "");
+  $("crHint").textContent = `«${e.title}», ${fmtRange(e)}`;
+  $("crErr").hidden = true; crMode(staff.length ? "staff" : "ext"); $("crScrim").hidden = false;
+}
+$("crForm").addEventListener("submit", async ev => {
+  ev.preventDefault();
+  const err = t => { $("crErr").textContent = t; $("crErr").hidden = false; };
+  const d = { event_id:CR.ev.id, job:$("c_job").value.trim() || null, note:$("c_note").value.trim() || null };
+  if(CR.mode === "staff"){ d.user_id = $("c_user").value; if(!d.user_id) return err("Выберите сотрудника или переключитесь на «Без аккаунта»."); }
+  else { d.name = $("c_name").value.trim(); d.phone = $("c_phone").value.trim() || null; if(!d.name) return err("Впишите имя."); }
+  $("crSave").disabled = true;
+  const res = await sb.from("event_crew").insert(d).select().single();
+  $("crSave").disabled = false;
+  if(res.error) return err(/duplicate/i.test(res.error.message || "") ? "Этот сотрудник уже в команде." : errText(res.error));
+  if(res.data && !crew.find(c => c.id === res.data.id)) crew.push(res.data);
+  $("crScrim").hidden = true; renderEvents();
+  const busy = crewBusy(res.data || d, CR.ev);
+  toast(busy.length ? `Добавлен(а), но в эти даты также на «${busy[0].title}»` : "Добавлен(а) в команду");
+});
+$("evMine").addEventListener("change", () => { EV.mine = $("evMine").checked; try { localStorage.setItem("sklad.evMine", EV.mine ? "1" : "0"); } catch(_) {} renderEvents(); });
+
 document.querySelectorAll("[data-close]").forEach(b => b.onclick = () => $(b.dataset.close).hidden = true);
-["evScrim","pkScrim","prScrim"].forEach(id => $(id).addEventListener("mousedown", e => { if(e.target === $(id)) $(id).hidden = true; }));
+["evScrim","pkScrim","prScrim","crScrim"].forEach(id => $(id).addEventListener("mousedown", e => { if(e.target === $(id)) $(id).hidden = true; }));
 
 // ---------- журнал: записи о мероприятиях ----------
 function evVal(k, v){
@@ -856,6 +945,11 @@ function logEventHtml(r, name){
     const ch = r.changes ? Object.entries(r.changes).filter(([k]) => EV_FIELDS[k]).map(([k, [a, b]]) => `<li>${EV_FIELDS[k]}: ${esc(evVal(k, a))} → <b>${esc(evVal(k, b))}</b></li>`).join("") : "";
     const verb = { insert:"создал(а) мероприятие", update:"изменил(а) мероприятие", delete:"удалил(а) мероприятие" }[r.action];
     what = `<span class="act ${r.action}">${verb}</span> ${link}${ch ? `<ul>${ch}</ul>` : ""}`;
+  } else if(r.kind === "event_crew"){
+    const c = r.changes || {}, who = esc(c._who || "человек") + (c.job ? ` (${esc(c.job)})` : "");
+    what = r.action === "insert" ? `<span class="act insert">добавил(а) в команду</span> ${who} — ${link}`
+         : r.action === "delete" ? `<span class="act delete">убрал(а) из команды</span> ${who} — ${link}`
+         : `<span class="act update">изменил(а) в команде</span> ${who} — ${link}`;
   } else {
     const c = r.changes || {}, [a, b] = c.qty || [], it = esc(c._item || "позиция");
     what = r.action === "insert" ? `<span class="act insert">добавил(а)</span> ${it} × ${esc(fmt(b))} в ${link}`
