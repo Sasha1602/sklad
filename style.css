@@ -391,6 +391,11 @@ table.av{border-collapse:collapse;font-size:12.5px;width:100%;font-variant-numer
   #tab-stock .filters > .sp{display:none}
   #tab-stock .filters > #addBtn{grid-column:1/-1;width:100%}
   .ftoggle .badge{margin-left:2px}
+  /* QR-этикетки: на телефоне все настройки видны, без кнопки фильтров */
+  #tab-stock .filters.lbbar{grid-template-columns:minmax(0,1fr)}
+  #tab-stock .filters.lbbar > *{grid-column:1/-1;width:100%}
+  #tab-stock .filters.lbbar > select:not([hidden]){display:block}
+  .lbtools .menuwrap{margin-left:auto}
 
   /* мероприятия */
   #tab-events,#tab-users{padding-top:12px}
@@ -576,6 +581,13 @@ table.av{border-collapse:collapse;font-size:12.5px;width:100%;font-variant-numer
   .lt code{font-family:"Courier New",monospace;font-size:9pt;font-weight:700;margin-top:1mm;background:none;padding:0;color:#000}
   .s40 .lt b{font-size:7.5pt;-webkit-line-clamp:2} .s40 .lt span{font-size:6pt}
   .s65 .lbl{padding:1.2mm 1.5mm;gap:1.2mm} .s65 .lt b{font-size:6.5pt;-webkit-line-clamp:2} .s65 .lt span{display:none} .s65 .lt code{font-size:7pt;margin-top:.5mm}
+  .lpage.sflag{align-content:start;justify-content:start}
+  .fl{display:grid;box-sizing:border-box;border:.2mm solid #8c8c8c;margin:-.1mm;overflow:hidden}
+  .fq{display:flex;align-items:center;justify-content:center}
+  .fq .lq{height:auto}
+  .fw{border-left:.25mm dashed #b3b3b3;border-right:.25mm dashed #b3b3b3}
+  .fb{display:flex;align-items:center;padding:1.5mm;min-width:0;overflow:hidden}
+  .fb .lt b{font-size:7pt;-webkit-line-clamp:3} .fb .lt span{font-size:6pt} .fb .lt code{font-size:8pt;margin-top:.8mm}
 }
 
 /* =================== Сканер =================== */
@@ -631,3 +643,13 @@ table.av{border-collapse:collapse;font-size:12.5px;width:100%;font-variant-numer
 .kchead{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline;padding:10px 12px;background:var(--accent-soft)}
 .kcacts{display:flex;gap:8px;justify-content:flex-end;padding:10px 12px;flex-wrap:wrap}
 .kitcheck .qtyBox input{pointer-events:none}
+
+/* =================== Меню «Печать» =================== */
+.menuwrap{position:relative;display:inline-flex}
+.menuwrap .chev{font-size:.8em;margin-left:2px;opacity:.8}
+.pmenu{position:absolute;right:0;top:calc(100% + 6px);z-index:40;min-width:250px;max-width:calc(100vw - 32px);background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:0 10px 28px rgba(0,0,0,.2);padding:4px;display:flex;flex-direction:column}
+.pmenu[hidden]{display:none}
+.pmenu button{appearance:none;border:0;background:none;font:inherit;color:var(--fg);text-align:left;padding:10px 12px;border-radius:8px;cursor:pointer;display:flex;flex-direction:column;gap:2px}
+.pmenu button:hover,.pmenu button:focus-visible{background:var(--surface-2);outline:none}
+.pmenu b{font-size:15px}
+.pmenu small{font-size:12.5px;color:var(--muted)}

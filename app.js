@@ -1410,11 +1410,12 @@ function renderLabels(){
       <span class="mono lbcode">${LB.what === "kits" ? kitCode(x.id) : itemCode(x.id)}</span>
     </label>`).join("") : `<div class="empty" style="border:0">${LB.what === "kits" ? "Комплектов нет." : "Ничего не найдено."}</div>`;
   $("lbAll").checked = list.length > 0 && list.every(x => set.has(x.id));
-  const labels = lbLabels(), per = +$("lbSize").value;
-  $("lbSum").textContent = labels.length ? `Наклеек: ${labels.length} · листов А4: ${Math.ceil(labels.length / per)}` : "Отметьте, что печатать";
+  const labels = lbLabels(), g = lbGeo(), per = g.per;
+  $("lbDia").hidden = !g.flag;
+  $("lbSum").textContent = labels.length ? `Наклеек: ${labels.length} · листов А4: ${Math.ceil(labels.length / per)}${g.flag ? " · печатайте на целом самоклеящемся листе и режьте по серым линиям" : ""}` : "Отметьте, что печатать";
   $("lbPrint").disabled = !labels.length;
 }
-["lbQ","lbPlace","lbSize","lbCopies"].forEach(id => $(id).addEventListener("input", renderLabels));
+["lbQ","lbPlace","lbSize","lbCopies","lbDia"].forEach(id => $(id).addEventListener("input", renderLabels));
 $("lbPick").addEventListener("change", e => {
   const id = +e.target.dataset.lb; if(!id) return;
   const set = LB.what === "kits" ? LB.selK : LB.sel; e.target.checked ? set.add(id) : set.delete(id); renderLabels();
@@ -1423,12 +1424,182 @@ $("lbAll").addEventListener("change", () => {
   const set = LB.what === "kits" ? LB.selK : LB.sel;
   lbList().forEach(x => $("lbAll").checked ? set.add(x.id) : set.delete(x.id)); renderLabels();
 });
-$("lbPrint").onclick = () => {
-  const labels = lbLabels(), per = +$("lbSize").value; if(!labels.length) return;
+function lbMenu(open){ $("lbMenu").hidden = !open; $("lbPrint").setAttribute("aria-expanded", open ? "true" : "false"); }
+$("lbPrint").onclick = ev => { ev.stopPropagation(); lbMenu($("lbMenu").hidden); };
+document.addEventListener("click", ev => { if(!ev.target.closest(".menuwrap")) lbMenu(false); });
+document.addEventListener("keydown", ev => { if(ev.key === "Escape") lbMenu(false); });
+$("lbDoPrint").onclick = () => {
+  lbMenu(false);
+  const labels = lbLabels(), g = lbGeo(), per = g.per; if(!labels.length) return;
   const pages = []; for(let i = 0; i < labels.length; i += per) pages.push(labels.slice(i, i + per));
-  $("printSheet").innerHTML = pages.map(pg => `<div class="lpage s${per}">${pg.map(l => `<div class="lbl"><div class="lq">${qrSvg(l.url)}</div><div class="lt"><b>${esc(l.name)}</b>${l.sub ? `<span>${esc(l.sub)}</span>` : ""}<code>${l.code}</code></div></div>`).join("")}</div>`).join("");
+  const txt = l => `<div class="lt"><b>${esc(l.name)}</b>${l.sub ? `<span>${esc(l.sub)}</span>` : ""}<code>${l.code}</code></div>`;
+  $("printSheet").innerHTML = g.flag
+    ? pages.map(pg => `<div class="lpage sflag" style="grid-template-columns:repeat(${g.cols},${g.L}mm);grid-auto-rows:${g.H}mm;padding:${g.py}mm ${g.px}mm">${pg.map(l =>
+        `<div class="fl" style="grid-template-columns:${g.panel}mm ${g.wrap}mm ${g.panel}mm"><div class="fq"><div class="lq" style="width:${g.q}mm;height:${g.q}mm">${qrSvg(l.url)}</div></div><div class="fw"></div><div class="fb">${txt(l)}</div></div>`).join("")}</div>`).join("")
+    : pages.map(pg => `<div class="lpage s${per}">${pg.map(l => `<div class="lbl"><div class="lq">${qrSvg(l.url)}</div>${txt(l)}</div>`).join("")}</div>`).join("");
   setTimeout(() => window.print(), 50);
 };
+$("lbDoPdf").onclick = async () => {
+  lbMenu(false);
+  const labels = lbLabels(), g = lbGeo(); if(!labels.length) return;
+  const b = $("lbPrint"), was = b.innerHTML; b.disabled = true; b.textContent = "Готовлю PDF…";
+  try {
+    const blob = await labelsPdf(labels, g);
+    await saveFile(blob, g.flag ? `QR-флажки на кабель до ${g.d} мм.pdf` : `QR-наклейки (${g.per} на А4).pdf`);
+  } catch(ex){ console.error(ex); toast("Не получилось сделать PDF: " + (ex.message || ex)); }
+  finally { b.innerHTML = was; b.disabled = false; }
+};
+
+// ---------- PDF с наклейками (без библиотек) ----------
+// Сетка совпадает с печатью из браузера (style.css, @media print). Размеры в мм.
+const LBGEO = {
+  24:{ cols:3, rows:8,  w:70,   h:37.125, px:0,  py:0,    py0:2,   px0:2.5, gap:2,   b:9,   clamp:3, sp:7, code:9, mt:1 },
+  40:{ cols:4, rows:10, w:48.5, h:25.4,   px:8,  py:21.5, py0:2,   px0:2.5, gap:2,   b:7.5, clamp:2, sp:6, code:9, mt:1 },
+  65:{ cols:5, rows:13, w:38,   h:21.2,   px:10, py:10.7, py0:1.2, px0:1.5, gap:1.2, b:6.5, clamp:2, sp:0, code:7, mt:.5 }
+};
+// Флажок: [QR | обмотка вокруг кабеля | название]. Концы склеиваются между собой — QR остаётся плоским.
+function flagGeo(d){
+  const H = 22, panel = 24, wrap = Math.ceil(Math.PI * d) + 2, L = 2 * panel + wrap, M = 5;
+  const cols = Math.max(1, Math.floor((210 - 2 * M) / L)), rows = Math.floor((297 - 2 * M) / H);
+  return { flag:true, d, H, panel, wrap, L, cols, rows, per:cols * rows, px:(210 - cols * L) / 2, py:(297 - rows * H) / 2, q:18, b:7, clamp:3, sp:6, code:8, mt:.8 };
+}
+function lbGeo(){
+  const v = $("lbSize").value;
+  return v === "flag" ? flagGeo(+$("lbDia").value || 10) : { ...LBGEO[v], per:+v };
+}
+function qrMatrix(text){ const q = new SkladQR(-1, SkladQR.L.M); q.addData(text); q.make(); return q; }
+function fitLine(x, s, W){
+  if(x.measureText(s).width <= W) return s;
+  while(s && x.measureText(s + "…").width > W) s = s.slice(0, -1);
+  return s.trimEnd() + "…";
+}
+function wrapText(x, text, W, max){
+  const lines = []; let cur = "";
+  for(const w of String(text).split(/\s+/).filter(Boolean)){
+    const t = cur ? cur + " " + w : w;
+    if(x.measureText(t).width <= W){ cur = t; continue; }
+    if(cur) lines.push(cur);
+    cur = w;
+    while(x.measureText(cur).width > W && cur.length > 1){
+      let k = cur.length; while(k > 1 && x.measureText(cur.slice(0, k)).width > W) k--;
+      lines.push(cur.slice(0, k)); cur = cur.slice(k);
+    }
+  }
+  if(cur) lines.push(cur);
+  if(lines.length > max){ lines.length = max; lines[max - 1] = fitLine(x, lines[max - 1] + "…", W); }
+  return lines;
+}
+// Текст наклейки — картинкой 600 dpi (кириллица без встраивания шрифтов), QR — векторами.
+function lblTextCanvas(l, g, wmm, hmm){
+  const D = 600 / 25.4, W = Math.round(wmm * D), H = Math.round(hmm * D), pt = v => v * 25.4 / 72 * D;
+  const c = document.createElement("canvas"); c.width = W; c.height = H;
+  const x = c.getContext("2d"); x.fillStyle = "#fff"; x.fillRect(0, 0, W, H);
+  const fb = pt(g.b), fs = pt(g.sp), fc = pt(g.code), SANS = "Arial, Helvetica, sans-serif";
+  x.font = `700 ${fb}px ${SANS}`; const nl = wrapText(x, l.name, W, g.clamp);
+  let sub = ""; if(g.sp && l.sub){ x.font = `400 ${fs}px ${SANS}`; sub = fitLine(x, l.sub, W); }
+  const lb = fb * 1.15, ls = fs * 1.15, lc = fc * 1.15, mt = g.mt * D;
+  let y = Math.max(0, (H - (nl.length * lb + (sub ? ls : 0) + mt + lc)) / 2);
+  x.textBaseline = "middle"; x.fillStyle = "#000";
+  x.font = `700 ${fb}px ${SANS}`; nl.forEach(s => { x.fillText(s, 0, y + lb / 2); y += lb; });
+  if(sub){ x.font = `400 ${fs}px ${SANS}`; x.fillStyle = "#333"; x.fillText(sub, 0, y + ls / 2); y += ls; x.fillStyle = "#000"; }
+  y += mt; x.font = `700 ${fc}px "Courier New", Courier, monospace`; x.fillText(l.code, 0, y + lc / 2);
+  return c;
+}
+async function deflate(u8){
+  const s = new Blob([u8]).stream().pipeThrough(new CompressionStream("deflate"));
+  return new Uint8Array(await new Response(s).arrayBuffer());
+}
+async function pdfImage(c){
+  const W = c.width, H = c.height;
+  if(window.CompressionStream){
+    const d = c.getContext("2d").getImageData(0, 0, W, H).data, g = new Uint8Array(W * H);
+    for(let i = 0; i < g.length; i++) g[i] = d[i * 4];
+    return { W, H, cs:"/DeviceGray", filter:"/FlateDecode", data:await deflate(g) };
+  }
+  const blob = await new Promise(r => c.toBlob(r, "image/jpeg", 0.95));
+  return { W, H, cs:"/DeviceRGB", filter:"/DCTDecode", data:new Uint8Array(await blob.arrayBuffer()) };
+}
+async function labelsPdf(labels, g){
+  if(!window.SkladQR) throw new Error("не загрузился генератор QR");
+  const per = g.per, K = 72 / 25.4, f = v => (+v).toFixed(3), PH = 297;
+  const qr = g.flag ? g.q : g.h - 2 * g.py0, tw = g.flag ? g.panel - 3 : g.w - 2 * g.px0 - qr - g.gap, th = g.flag ? g.H - 3 : qr;
+  const imgs = [], imgIdx = new Map(), qrCache = new Map(), pages = [];
+  for(let p = 0; p < labels.length; p += per){
+    let s = "";
+    for(const [i, l] of labels.slice(p, p + per).entries()){
+      const cw = g.flag ? g.L : g.w, ch = g.flag ? g.H : g.h;
+      const X = g.px + (i % g.cols) * cw, Y = g.py + Math.floor(i / g.cols) * ch;
+      let qx = X + g.px0, qy = Y + g.py0, tx = qx + qr + g.gap, ty = qy;
+      if(g.flag){
+        qx = X + (g.panel - qr) / 2; qy = Y + (g.H - qr) / 2;
+        tx = X + g.panel + g.wrap + 1.5; ty = Y + 1.5;
+        // линия отреза и пунктир сгиба
+        const y0 = f((PH - Y - g.H) * K), y1 = f((PH - Y) * K);
+        s += `0.55 G 0.35 w ${f(X * K)} ${y0} ${f(g.L * K)} ${f(g.H * K)} re S\n[2 1.5] 0 d 0.75 G`;
+        for(const fx of [X + g.panel, X + g.panel + g.wrap]) s += ` ${f(fx * K)} ${y0} m ${f(fx * K)} ${y1} l`;
+        s += " S [] 0 d\n";
+      }
+      // QR: каждая полоса тёмных модулей — прямоугольник
+      let rects = qrCache.get(l.url);
+      if(!rects){
+        const q = qrMatrix(l.url), n = q.getModuleCount(); rects = { n, runs:[] };
+        for(let r = 0; r < n; r++){ let c = 0; while(c < n){ if(q.isDark(r, c)){ const a = c; while(c < n && q.isDark(r, c)) c++; rects.runs.push([r, a, c - a]); } else c++; } }
+        qrCache.set(l.url, rects);
+      }
+      const m = qr / (rects.n + 4);
+      s += "0 g\n";
+      for(const [r, a, w] of rects.runs){
+        const yt = qy + (2 + r) * m;
+        s += `${f((qx + (2 + a) * m) * K)} ${f((PH - yt - m - 0.01) * K)} ${f(w * m * K)} ${f((m + 0.01) * K)} re\n`;
+      }
+      s += "f\n";
+      // текст
+      const key = l.name + "\u0001" + l.sub + "\u0001" + l.code;
+      if(!imgIdx.has(key)){ imgIdx.set(key, imgs.length); imgs.push(await pdfImage(lblTextCanvas(l, g, tw, th))); }
+      s += `q ${f(tw * K)} 0 0 ${f(th * K)} ${f(tx * K)} ${f((PH - ty - th) * K)} cm /Im${imgIdx.get(key)} Do Q\n`;
+    }
+    pages.push(s);
+  }
+  return buildPdf(pages, imgs);
+}
+async function buildPdf(pages, imgs){
+  const enc = new TextEncoder(), parts = [], offs = []; let len = 0;
+  const push = u => { if(typeof u === "string") u = enc.encode(u); parts.push(u); len += u.length; };
+  const obj = (n, body) => { offs[n] = len; push(`${n} 0 obj\n`); body(); push("\nendobj\n"); };
+  const first = 4 + imgs.length, N = pages.length, total = first + 2 * N;
+  push("%PDF-1.4\n%âãÏÓ\n");
+  obj(1, () => push("<< /Type /Catalog /Pages 2 0 R >>"));
+  obj(2, () => push(`<< /Type /Pages /Count ${N} /Kids [${pages.map((_, i) => `${first + 2 * i} 0 R`).join(" ")}] >>`));
+  obj(3, () => push(`<< /ProcSet [/PDF /ImageB /ImageC] /XObject << ${imgs.map((_, i) => `/Im${i} ${4 + i} 0 R`).join(" ")} >> >>`));
+  imgs.forEach((m, i) => obj(4 + i, () => {
+    push(`<< /Type /XObject /Subtype /Image /Width ${m.W} /Height ${m.H} /ColorSpace ${m.cs} /BitsPerComponent 8 /Filter ${m.filter} /Length ${m.data.length} >>\nstream\n`);
+    push(m.data); push("\nendstream");
+  }));
+  for(let i = 0; i < N; i++){
+    const n = first + 2 * i;
+    obj(n, () => push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.276 841.89] /Resources 3 0 R /Contents ${n + 1} 0 R >>`));
+    let body = enc.encode(pages[i]), filt = "";
+    if(window.CompressionStream){ body = await deflate(body); filt = " /Filter /FlateDecode"; }
+    obj(n + 1, () => { push(`<< /Length ${body.length}${filt} >>\nstream\n`); push(body); push("\nendstream"); });
+  }
+  const xref = len;
+  push(`xref\n0 ${total}\n0000000000 65535 f \n`);
+  for(let n = 1; n < total; n++) push(String(offs[n]).padStart(10, "0") + " 00000 n \n");
+  push(`trailer\n<< /Size ${total} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+  return new Blob(parts, { type:"application/pdf" });
+}
+// На телефоне — «Поделиться» (сохранить в Файлы, отправить в мессенджер), на компьютере — скачивание.
+async function saveFile(blob, name){
+  const file = new File([blob], name, { type:blob.type });
+  if(matchMedia("(pointer:coarse)").matches && navigator.canShare && navigator.canShare({ files:[file] })){
+    try { await navigator.share({ files:[file], title:name }); return; }
+    catch(ex){ if(ex.name === "AbortError") return; }
+  }
+  const u = URL.createObjectURL(blob), a = document.createElement("a");
+  a.href = u; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(u), 60000);
+  toast("PDF скачан: " + name);
+}
 
 // =====================================================================
 // ---------- сканер при отгрузке / возврате ----------

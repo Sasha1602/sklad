@@ -14,7 +14,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&family=Unbounded:wght@600&display=swap">
-<link rel="stylesheet" href="style.css?v=2026-10-22-loss">
+<link rel="stylesheet" href="style.css?v=2026-10-22-flag2">
 </head>
 <body>
 
@@ -106,6 +106,12 @@
             <option value="24">А4 на 24 наклейки (70×37 мм)</option>
             <option value="40">А4 на 40 наклеек (48,5×25,4 мм)</option>
             <option value="65">А4 на 65 наклеек (38×21,2 мм)</option>
+            <option value="flag">Флажок на провод (обернуть вокруг кабеля)</option>
+          </select>
+          <select id="lbDia" class="field" aria-label="Толщина кабеля" hidden>
+            <option value="6">Кабель до 6 мм — DMX, микрофонный</option>
+            <option value="10" selected>До 10 мм — силовой, powerCON, удлинитель</option>
+            <option value="15">До 15 мм — толстый, мультикор</option>
           </select>
           <select id="lbCopies" class="field" aria-label="Сколько копий">
             <option value="one">По одной на позицию</option>
@@ -116,7 +122,13 @@
           <label class="check"><input type="checkbox" id="lbAll"> выбрать все</label>
           <span class="hint" id="lbSum"></span>
           <span class="sp"></span>
-          <button type="button" class="btn primary" id="lbPrint">Печать</button>
+          <span class="menuwrap">
+            <button type="button" class="btn primary" id="lbPrint" aria-haspopup="menu" aria-expanded="false">Печать <span class="chev" aria-hidden="true">▾</span></button>
+            <div class="pmenu" id="lbMenu" role="menu" hidden>
+              <button type="button" role="menuitem" id="lbDoPrint"><b>Распечатать</b><small>на своём принтере</small></button>
+              <button type="button" role="menuitem" id="lbDoPdf"><b>Скачать PDF</b><small>для копицентра или типографии, масштаб 1:1</small></button>
+            </div>
+          </span>
         </div>
         <div class="lbpick" id="lbPick"></div>
         <p class="hint">Наведите камеру телефона на наклейку — откроется карточка позиции. При отгрузке и возврате кладовщик сканирует наклейки прямо на сайте.</p>
