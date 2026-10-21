@@ -653,3 +653,8 @@ table.av{border-collapse:collapse;font-size:12.5px;width:100%;font-variant-numer
 .pmenu button:hover,.pmenu button:focus-visible{background:var(--surface-2);outline:none}
 .pmenu b{font-size:15px}
 .pmenu small{font-size:12.5px;color:var(--muted)}
+
+/* =================== Подписка на календарь =================== */
+.calsub{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
+.calsub .calopts{margin-top:8px}
+.calopts a.btn:not(.primary){color:var(--fg)}

@@ -783,7 +783,7 @@ $("evDetail").addEventListener("click", async ev => {
   if(a === "load") openProcess(e, "load");
   if(a === "return") openProcess(e, "return");
   if(a === "copy") copyEventList(e);
-  if(a === "cal"){ $("calHint").textContent = `«${e.title}», ${fmtRange(e)}${e.venue ? ", " + e.venue : ""}`; $("calGoogle").href = googleCalUrl(e); CAL.ev = e; $("calScrim").hidden = false; }
+  if(a === "cal") openCal(e);
   if(a === "cancel") setEvStatus(e, "cancelled", "Мероприятие отменено, бронь снята");
   if(a === "restore") setEvStatus(e, "planned", "Мероприятие восстановлено");
   if(a === "reopen") setEvStatus(e, "out", "Мероприятие снова на выезде");
@@ -2126,9 +2126,50 @@ async function genVapid(){
   return { pub:bytesToB64u(pub), priv:jwk.d, secret:bytesToB64u(crypto.getRandomValues(new Uint8Array(24))) };
 }
 
-const CAL = { ev:null };
-$("calIcs").onclick = () => { if(CAL.ev) addToCalendar(CAL.ev); $("calScrim").hidden = true; };
+const CAL = { ev:null, link:null };
+// Ссылка на календарь с сервера (09_calendar.sql + функция уведомлений). Без неё — файл из браузера.
+async function calLink(){
+  if(CAL.link) return CAL.link;
+  try {
+    const a = await sb.from("app_links").select("cal_url").eq("id", 1).maybeSingle();
+    if(a.error || !a.data?.cal_url) return null;
+    let t = await sb.from("cal_tokens").select("token").eq("user_id", me.id).maybeSingle();
+    if(!t.error && !t.data) t = await sb.from("cal_tokens").insert({}).select("token").single();
+    if(t.error || !t.data) return null;
+    return CAL.link = { url:a.data.cal_url, token:t.data.token };
+  } catch(_){ return null; }
+}
+const calFeed = (L, q) => `${L.url}?cal=${L.token}${q || ""}&s=${encodeURIComponent(siteBase())}`;
+const webcal = u => u.replace(/^https?:/, "webcal:");
+async function openCal(e){
+  $("calHint").textContent = `«${e.title}», ${fmtRange(e)}${e.venue ? ", " + e.venue : ""}`;
+  $("calGoogle").href = googleCalUrl(e); CAL.ev = e;
+  $("calSub").hidden = true; $("calScrim").hidden = false;
+  const L = await calLink(); if(!L || CAL.ev !== e) return;
+  const apple = isIOS() || /Macintosh/.test(navigator.userAgent);
+  const sub = q => apple ? webcal(calFeed(L, q)) : "https://calendar.google.com/calendar/r?cid=" + encodeURIComponent(webcal(calFeed(L, q)));
+  $("calSubMine").href = sub(""); $("calSubAll").href = sub("&all=1"); $("calSubAll").hidden = !can("manager");
+  $("calSubHint").textContent = apple
+    ? "iPhone спросит «Подписаться на календарь?» — нажмите «Подписаться». Чтобы приходили напоминания: Настройки → Календарь → Учётные записи → Подписные календари → «Склад» → выключите «Удалить напоминания»."
+    : "Откроется Google Календарь — нажмите «Добавить». На Android календарь Google покажет эти события сам.";
+  $("calSub").hidden = false;
+}
+$("calIcs").onclick = async () => {
+  const e = CAL.ev; if(!e) return;
+  const L = CAL.link;
+  // iPhone: файл из приложения на экране «Домой» не открывается — открываем ссылку с сервера.
+  if(L && isIOS()){ window.open(calFeed(L, "&ev=" + e.id), "_blank"); $("calScrim").hidden = true; return; }
+  if(isIOS() && matchMedia("(display-mode: standalone)").matches && !L){ toast("Подключите календарь по ссылке (09_calendar.sql) или откройте сайт в Safari"); return; }
+  addToCalendar(e); $("calScrim").hidden = true;
+};
 $("calGoogle").addEventListener("click", () => setTimeout(() => $("calScrim").hidden = true, 100));
+$("calSubMine").addEventListener("click", () => setTimeout(() => $("calScrim").hidden = true, 300));
+$("calSubAll").addEventListener("click", () => setTimeout(() => $("calScrim").hidden = true, 300));
+$("calCopy").onclick = async () => {
+  const L = CAL.link; if(!L) return;
+  try { await navigator.clipboard.writeText(calFeed(L, "")); toast("Ссылка скопирована — вставьте её в календаре как «Подписку»"); }
+  catch(_){ prompt("Скопируйте ссылку:", calFeed(L, "")); }
+};
 
 // =====================================================================
 // ---------- проверка кейса при возврате и разбор недостач ----------
