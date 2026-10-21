@@ -346,3 +346,143 @@ table.av{border-collapse:collapse;font-size:12.5px;width:100%;font-variant-numer
 .prow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:14px;padding:6px 10px;border:1px solid var(--line);border-radius:8px}
 .prow.past{opacity:.55}
 .prow .edit{margin-left:auto;width:30px;height:30px}
+
+/* =================== Телефон =================== */
+.tab .ti,.logout .ti{display:none;width:20px;height:20px}
+.ftoggle{display:none}
+#mainTabs{min-width:0;max-width:100%}
+
+@media (max-width:720px){
+  body{font-size:15px}
+  /* шапка: строка 1 — логотип и пользователь, строка 2 — вкладки на всю ширину */
+  .barIn{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 10px;padding-block:8px}
+  .barIn .brand{grid-column:1;grid-row:1;gap:8px}
+  .barIn .brand .tape{width:24px;height:16px}
+  .barIn .brand h1{font-size:14px;overflow:hidden;text-overflow:ellipsis}
+  .who{grid-column:2;grid-row:1;width:auto;margin:0;gap:6px;flex-wrap:nowrap;min-width:0}
+  .who .live #liveText{display:none}
+  .who .me{display:flex;align-items:center;gap:6px;min-width:0}
+  .me-btn{max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
+  .who .role{font-size:10.5px;padding:2px 7px}
+  .who .btn{margin-left:0}
+  .logout{width:36px;min-height:36px;padding:0}
+  .logout .ti{display:block}
+  .logout .tl{display:none}
+  #mainTabs{grid-column:1/-1;grid-row:2;display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:2px;padding:3px;width:100%}
+  #mainTabs .tab{flex-direction:column;gap:2px;padding:6px 2px 5px;font-size:11px;line-height:1.1;position:relative;min-width:0}
+  #mainTabs .tab .ti{display:block}
+  #mainTabs .tab .tl{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #mainTabs .badge{position:absolute;top:2px;left:calc(50% + 6px);font-size:10px;padding:0 5px;line-height:15px}
+
+  /* сводка — лента в одну строку */
+  .stats{display:flex;overflow-x:auto;gap:0;margin-block:12px;scrollbar-width:none;background:var(--surface)}
+  .stats::-webkit-scrollbar{display:none}
+  .stat,.stat:last-child{flex:1 0 auto;min-width:96px;padding:8px 12px;border-right:1px solid var(--line);grid-column:auto}
+  .stat:last-child{border-right:0}
+  .stat b{font-size:19px}
+  .stat span{font-size:10.5px;white-space:nowrap}
+
+  /* фильтры за кнопкой */
+  #tab-stock .filters{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}
+  #tab-stock .filters .ftoggle{display:inline-flex}
+  #tab-stock .filters > select,#tab-stock .filters > .check,#tab-stock .filters > #csvBtn{display:none;grid-column:1/-1;width:100%}
+  #tab-stock .filters.open > select,#tab-stock .filters.open > #csvBtn{display:block}
+  #tab-stock .filters.open > .check{display:flex}
+  #tab-stock .filters > .sp{display:none}
+  #tab-stock .filters > #addBtn{grid-column:1/-1;width:100%}
+  .ftoggle .badge{margin-left:2px}
+
+  /* мероприятия */
+  #tab-events,#tab-users{padding-top:12px}
+  .evbar{display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px;align-items:center}
+  .evbar .seg{grid-column:1}
+  .evbar .check{grid-column:2;justify-self:end}
+  .evbar .monthNav{grid-column:1/-1;justify-content:space-between}
+  .evbar .monthNav b{flex:1}
+  .evbar .sp{display:none}
+  .evbar #evAddBtn{grid-column:1/-1;width:100%}
+  .evcard{padding:10px 12px;gap:10px}
+  .evdate{width:38px;padding-right:10px}
+  .evdate b{font-size:19px}
+  .evacts{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .evacts .btn{width:100%;white-space:normal;text-align:center}
+  .evacts .btn.primary{grid-column:1/-1}
+  .evacts .sp{display:none}
+  .evh{font-size:17px}
+  .evhead{padding:14px}
+  .evfacts{gap:8px 18px}
+  .evfacts span{font-size:14px}
+  .back{margin-bottom:6px}
+  .group .ghead{padding:9px 12px}
+  .group.crew .ghead .btn.sm{margin-left:auto}
+
+  /* склад: строки-карточки */
+  .row{padding:10px 12px}
+  .qtyBox button{width:36px;height:36px}
+
+  /* люди */
+  .avhead{justify-content:space-between}
+  .avhead .monthNav{flex:1;justify-content:flex-end}
+  .avhead .monthNav b{min-width:0;font-size:13px}
+  .av .nmcol{min-width:96px;padding:0 8px}
+  .av .nmcol .link{font-size:12.5px;white-space:normal;text-align:left}
+  .urow{grid-template-columns:1fr;padding:12px}
+  .uact{justify-content:stretch}
+  .uact select{flex:1;width:auto!important}
+  .legend dl{grid-template-columns:1fr}
+
+  /* окна — почти на весь экран, кнопки крупные */
+  .scrim{padding:max(10px,env(safe-area-inset-top,0px)) 8px 10px}
+  .sheet{padding:16px;border-radius:12px}
+  .sheet .actions{position:sticky;bottom:-16px;background:var(--surface);margin:14px -16px -16px;padding:12px 16px calc(12px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--line);border-radius:0 0 12px 12px}
+  .sheet .actions .btn{flex:1}
+  .sheet .actions .sp,.sheet .actions .hint{flex-basis:100%;order:-1;text-align:left}
+  .pkList{max-height:none;overflow:visible}
+  .pkcat{top:-16px}
+  .field,select.field{font-size:16px} /* без авто-зума в iOS */
+}
+@media (max-width:380px){
+  .me-btn{max-width:80px}
+  .who .role{display:none}
+}
+@media (max-width:760px){
+  .row{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px}
+  .row > div:first-child{grid-column:1;grid-row:1}
+  .row .edit{grid-column:2;grid-row:1;justify-self:end;align-self:start}
+  .row .qty{grid-column:1/-1;grid-row:2}
+  .row .st1{grid-column:1;grid-row:3;justify-self:stretch}
+  .row .st2{grid-column:2;grid-row:3;justify-self:stretch}
+  .row .st1 .chip,.row .st2 .chip{width:100%}
+  .row .meta{grid-row:4}
+}
+@media (max-width:720px){
+  .avhead{flex-direction:column;align-items:stretch;gap:6px}
+  .avhead .monthNav{justify-content:space-between}
+  .avhead .monthNav b{flex:1;text-align:center;font-size:14px}
+}
+
+/* ---------- телефоны: компактная шапка, люди, таблица ---------- */
+#mainTabs .tab{white-space:nowrap}
+@media (max-width:720px){
+  .bar{position:static}
+  .barIn{gap:8px;padding-block:8px}
+  .barIn .brand h1{font-size:15px}
+  #mainTabs{width:100%;overflow-x:auto;scrollbar-width:none}
+  #mainTabs::-webkit-scrollbar{display:none}
+  #mainTabs .tab{flex:1 0 auto;justify-content:center;padding:6px 10px}
+  .who{width:100%;flex-wrap:nowrap;gap:8px;margin-left:0}
+  .who .live #liveText{display:none}
+  .me{min-width:0;flex:1;display:flex;align-items:center;gap:6px;overflow:hidden}
+  .me-btn{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .me .role{flex:none}
+  .who .btn{margin-left:auto;flex:none;min-height:32px;padding:4px 8px}
+}
+@media (max-width:560px){
+  .urow{grid-template-columns:1fr;gap:10px}
+  .uact{justify-content:flex-start;flex-wrap:wrap}
+  .urow .uact select{flex:1 1 160px;width:auto;min-width:0}
+  .urow .em{overflow-wrap:anywhere}
+  .av .nmcol{min-width:0;width:96px;max-width:96px;white-space:normal;line-height:1.15;padding:4px 8px}
+  .av .nmcol .link{font-size:12.5px;text-align:left}
+  .av th,.av td{min-width:30px;height:32px}
+}
