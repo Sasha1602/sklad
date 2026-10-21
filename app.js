@@ -369,6 +369,7 @@ function renderLog(){
   const ACT = { insert:"добавил(а)", update:"изменил(а)", delete:"удалил(а)" };
   $("logList").innerHTML = rows.map(r => {
     if(r.kind === "event" || r.kind === "event_line" || r.kind === "event_crew") return logEventHtml(r, name);
+    if(r.kind === "loss"){ const t = new Date(r.created_at), c = r.changes || {}; return `<div class="ev"><time datetime="${esc(r.created_at)}">${t.toLocaleDateString("ru-RU", { day:"2-digit", month:"2-digit" })} ${t.toLocaleTimeString("ru-RU", { hour:"2-digit", minute:"2-digit" })}</time><div class="what"><span class="who">${esc(name(r.user_id))}</span> <span class="act ${r.action === "found" ? "insert" : "delete"}">${r.action === "found" ? "нашёл(ась)" : "списал(а) потерю"}</span> ${esc(c._item || "позиция")} × ${esc(fmt(c.n))} — ${evById(r.item_id) ? `<a href="#ev-${r.item_id}" data-ev="${r.item_id}">«${esc(r.item_name)}»</a>` : `«${esc(r.item_name || "")}»`}</div></div>`; }
     if(r.kind === "kit"){ const t = new Date(r.created_at); return `<div class="ev"><time datetime="${esc(r.created_at)}">${t.toLocaleDateString("ru-RU", { day:"2-digit", month:"2-digit" })} ${t.toLocaleTimeString("ru-RU", { hour:"2-digit", minute:"2-digit" })}</time><div class="what"><span class="who">${esc(name(r.user_id))}</span> <span class="act ${r.action}">${{ insert:"создал(а) комплект", update:"изменил(а) комплект", delete:"удалил(а) комплект" }[r.action]}</span> ${esc(r.item_name || "")}</div></div>`; }
     const ch = r.changes ? Object.entries(r.changes).filter(([k]) => FIELDS[k]).map(([k,[a,b]]) => `<li>${FIELDS[k]}: ${esc(fmt(a))} → <b>${esc(fmt(b))}</b></li>`).join("") : "";
     const t = new Date(r.created_at);
@@ -501,8 +502,8 @@ function conflictsOf(e){
 function shortagesOf(e){
   if(e.status !== "returned") return [];
   return linesOf(e.id).map(l => {
-    const sent = l.qty_out != null ? +l.qty_out : +l.qty, back = l.qty_back != null ? +l.qty_back : sent;
-    return back < sent ? { l, it:itemById(l.item_id), miss:sent - back } : null;
+    const sent = l.qty_out != null ? +l.qty_out : +l.qty, back = l.qty_back != null ? +l.qty_back : sent, wo = num(l.written_off) || 0;
+    return sent - back - wo > 0 ? { l, it:itemById(l.item_id), miss:sent - back - wo, back, wo } : null;
   }).filter(Boolean);
 }
 
@@ -595,6 +596,8 @@ function evCard(e){
   if(s.length) tags.push(`<span class="chip c-bad">Не вернулось: ${s.reduce((a, x) => a + x.miss, 0)} ед.</span>`);
   if(!ls.length && isActive(e)) tags.push(`<span class="chip c-warn">Оборудование не выбрано</span>`);
   if(busyN && isActive(e)) tags.push(`<span class="chip c-bad">Люди заняты: ${busyN}</span>`);
+  if(me && isActive(e) && cr.some(c => c.user_id === me.id)) tags.unshift(`<span class="chip c-ok">вы едете</span>`);
+  else if(me && isActive(e) && e.responsible === me.id) tags.unshift(`<span class="chip c-ok">вы ответственный</span>`);
   return `<button type="button" class="evcard st-${e.status}" data-ev="${e.id}">
     <span class="evdate"><b>${d.getDate()}</b><small>${d.toLocaleDateString("ru-RU", { month:"short" }).replace(/\./g, "")}</small></span>
     <span class="evbody"><span class="evtitle">${esc(e.title)}</span>
@@ -663,7 +666,11 @@ function renderEventDetail(e){
 
   let banner = "";
   if(c.length) banner += `<div class="banner bad"><b>Не хватает оборудования на эти даты</b><ul>${c.map(x => `<li>${esc(x.it.name)}: нужно ${x.need}, свободно ${Math.max(0, x.free)}${x.others.length ? ` — занято: ${x.others.map(o => `<a href="#ev-${o.ev.id}" data-ev="${o.ev.id}">«${esc(o.ev.title)}»</a> (${o.qty})`).join(", ")}` : ""}</li>`).join("")}</ul></div>`;
-  if(s.length) banner += `<div class="banner bad"><b>Не вернулось с мероприятия</b><ul>${s.map(x => `<li>${esc(x.it ? x.it.name : "позиция")} — ${x.miss} ${esc(x.it ? x.it.unit || "шт." : "шт.")}</li>`).join("")}</ul><p class="hint">Проверьте машину и площадку. Если оборудование потеряно — уменьшите его количество на складе.</p></div>`;
+  if(s.length) banner += `<div class="banner bad losses"><b>Не вернулось с мероприятия — разберите недостачу</b>
+    ${s.map(x => `<div class="lossrow" data-loss="${x.l.id}"><span class="lossname">${esc(x.it ? x.it.name : "позиция")} — <b>${x.miss}</b> ${esc(x.it ? x.it.unit || "шт." : "шт.")}${x.wo ? ` <span class="muted">(списано ${x.wo})</span>` : ""}</span>
+      <span class="lossacts">${x.miss > 1 ? `<input type="number" class="field lossn" min="1" max="${x.miss}" value="${x.miss}" aria-label="Сколько">` : ""}
+      ${W ? `<button type="button" class="btn sm" data-found="${x.l.id}">Нашёлся</button>` : ""}${M ? `<button type="button" class="btn sm danger" data-wo="${x.l.id}">Списать</button>` : ""}</span></div>`).join("")}
+    <p class="hint">«Нашёлся» — вернули позже (забыли в машине, привёз техник). «Списать» — потеряно: количество на складе уменьшится, в журнале останется запись.</p></div>`;
   if(e.status === "planned" && e.date_to < todayKey()) banner += `<div class="banner warn">Дата мероприятия прошла, а отгрузка не отмечена. Отметьте отгрузку и возврат или отмените мероприятие, чтобы снять бронь.</div>`;
 
   // колонки по статусу
@@ -706,7 +713,7 @@ function renderEventDetail(e){
           ${e.client ? `<span><small>Заказчик</small>${esc(e.client)}</span>` : ""}
           ${resp ? `<span><small>Ответственный</small>${esc(resp)}</span>` : ""}
           <span><small>Оборудование</small>${ls.length} поз. · ${units} ед.</span>
-          ${kitsInEvent(e).length ? `<span><small>Комплекты</small>${kitsInEvent(e).map(k => esc(k.name)).join(", ")}</span>` : ""}
+          ${kitsInEvent(e).length ? `<span><small>Комплекты</small>${kitsInEvent(e).map(k => esc(k.name) + (isActive(e) && kitIncomplete(k.id).length ? ` <span class="chip c-bad xs">неполный</span>` : "")).join(", ")}</span>` : ""}
         </div>
         ${e.note ? `<p class="evnote">${esc(e.note)}</p>` : ""}
       </div>
@@ -744,6 +751,8 @@ function crewSection(e){
 $("evDetail").addEventListener("click", async ev => {
   const lk = ev.target.closest("a[data-ev]"); if(lk){ ev.preventDefault(); openEvent(+lk.dataset.ev); return; }
   const e = evById(EV.open); if(!e) return;
+  const fb = ev.target.closest("[data-found],[data-wo]");
+  if(fb){ resolveLoss(e, fb); return; }
   const cd = ev.target.closest("[data-crdel]");
   if(cd){
     const id = +cd.dataset.crdel;
@@ -919,6 +928,7 @@ $("pkSave").onclick = async () => {
 // ---------- отгрузка и возврат ----------
 const PR = { ev:null, mode:"load", vals:new Map() };
 function openProcess(e, mode){
+  KC.kit = null; PR.zeroed = false; setTimeout(renderKitCheck, 0);
   PR.ev = e; PR.mode = mode; PR.vals = new Map();
   linesOf(e.id).forEach(l => PR.vals.set(l.id, mode === "load" ? +l.qty : (l.qty_out != null ? +l.qty_out : +l.qty)));
   $("prTitle").textContent = mode === "load" ? "Отгрузка на мероприятие" : "Приём возврата";
@@ -1241,7 +1251,8 @@ function renderKits(){
         ${M ? `<span class="kitbtns"><button type="button" class="btn sm" data-kitedit="${k.id}">Изменить</button><button type="button" class="btn sm danger" data-kitdel="${k.id}">Удалить</button></span>` : ""}</div>
       <div class="kitmeta"><span class="mono">K-${k.id}</span>${k.place ? `<span>${esc(k.place)}</span>` : ""}${k.note ? `<span class="muted">${esc(k.note)}</span>` : ""}
         ${out.length ? `<span class="chip c-warn xs">на выезде: ${out.map(e => esc(e.title)).join(", ")}</span>` : ""}
-        ${short.length ? `<span class="chip c-bad xs">на складе меньше, чем в составе: ${short.length} поз.</span>` : ""}</div>
+        ${short.length ? `<span class="chip c-bad xs">на складе меньше, чем в составе: ${short.length} поз.</span>` : ""}
+        ${(inc => inc.length ? `<span class="chip c-bad xs">неполный: ${esc(incText(inc))}</span>` : "")(kitIncomplete(k.id))}</div>
       <div class="kitlist">${ls.map(o => `<div class="kitrow"><span>${esc(o.it.name)}${o.it.maker ? ` <span class="maker">${esc(o.it.maker)}</span>` : ""}</span><b class="mono">× ${+o.x.qty}</b></div>`).join("") || `<p class="hint">Состав пуст — нажмите «Изменить».</p>`}</div>
     </section>`;
   }).join("") + `</div>`;
@@ -1337,7 +1348,7 @@ function renderEvKits(){
     const free = kitFree(k.id, e.date_from, e.date_to, e.id), ls = kitLines(k.id);
     return `<div class="pkrow${inEv.includes(k.id) ? " on" : ""}">
       <div class="lname">${esc(k.name)}<div class="sub">${ls.length} поз. · ${ls.reduce((a, x) => a + +x.qty, 0)} ед.${k.place ? " · " + esc(k.place) : ""}</div></div>
-      <div class="pkfree ${free <= 0 ? "neg" : ""}">${inEv.includes(k.id) ? "уже в списке" : free > 0 ? `можно взять: <b>${free}</b>` : "не хватает на эти даты"}</div>
+      <div class="pkfree ${free <= 0 ? "neg" : ""}">${inEv.includes(k.id) ? "уже в списке" : free > 0 ? `можно взять: <b>${free}</b>` : "не хватает на эти даты"}${(inc => inc.length ? `<span class="neg">неполный: ${esc(incText(inc))}</span>` : "")(kitIncomplete(k.id))}</div>
       <button type="button" class="btn sm" data-ekadd="${k.id}"${ls.length ? "" : " disabled"}>+ Добавить</button>
     </div>`;
   }).join("") : `<div class="empty" style="border:0">Комплектов пока нет. Создайте их в «Склад → Комплекты».</div>`;
@@ -1454,15 +1465,19 @@ function onScanCode(text, manual){
   if(c.kind === "i"){
     const it = itemById(c.id), l = ls.find(x => x.item_id === c.id);
     if(!l) return scanFeedback(false, it ? `«${it.name}» нет в списке этого мероприятия` : "Позиция не найдена");
-    const v = (PR.vals.get(l.id) || 0) + 1; PR.vals.set(l.id, v); renderProcess(l.id);
+    const v = (PR.vals.get(l.id) || 0) + 1; PR.vals.set(l.id, v);
+    if(KC.kit){ const kq = kitLines(KC.kit.id).find(x => x.item_id === c.id); if(kq && (KC.counts.get(c.id) || 0) < +kq.qty) KC.counts.set(c.id, (KC.counts.get(c.id) || 0) + 1); }
+    renderProcess(l.id); renderKitCheck();
     const t = prTarget(l);
     return scanFeedback(true, `${it.name}: ${v} из ${t}` + (v > t ? " — больше, чем нужно" : v === t ? " ✓" : ""));
   }
   const k = kitById(c.id); if(!k) return scanFeedback(false, "Комплект не найден");
+  if(PR.mode === "return") return openKitCheck(k);
+  const inc = kitIncomplete(k.id);
   let n = 0, miss = 0;
   kitLines(k.id).forEach(x => { const l = ls.find(y => y.item_id === x.item_id); if(l){ PR.vals.set(l.id, (PR.vals.get(l.id) || 0) + +x.qty); n++; } else miss++; });
   renderProcess();
-  scanFeedback(n > 0, n ? `Комплект «${k.name}»: +${n} поз.` + (miss ? `, ещё ${miss} поз. нет в списке` : "") : `Комплекта «${k.name}» нет в списке`);
+  scanFeedback(n > 0 && !inc.length, n ? `Комплект «${k.name}»: +${n} поз.` + (miss ? `, ещё ${miss} поз. нет в списке` : "") + (inc.length ? ` — внимание: кейс неполный (${inc.map(x => x.it.name + " × " + x.n).join(", ")})` : "") : `Комплекта «${k.name}» нет в списке`);
 }
 function loadJsQR(){
   const urls = ["vendor/jsQR.js", "https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js", "https://unpkg.com/jsqr@1.4.0/dist/jsQR.js"];
@@ -1521,13 +1536,17 @@ function scheduleToday(){ if(_todayQ) return; _todayQ = setTimeout(() => { _toda
 function renderToday(){
   if(!me || !$("todayView")) return;
   const t = todayKey(), tm = addDays(t, 1), wk = addDays(t, 14);
-  const leaving = events.filter(e => e.status === "planned" && (e.date_from === t || e.date_from === tm)).sort((a, b) => a.date_from.localeCompare(b.date_from));
+  const leavingToday = events.filter(e => e.status === "planned" && e.date_from <= t && e.date_to >= t).sort((a, b) => a.date_from.localeCompare(b.date_from));
+  const leavingTom = events.filter(e => e.status === "planned" && e.date_from === tm).sort((a, b) => a.id - b.id);
+  const leaving = [...leavingToday, ...leavingTom];
   const out = events.filter(e => e.status === "out").sort((a, b) => a.date_to.localeCompare(b.date_to));
   const notLoaded = events.filter(e => e.status === "planned" && e.date_to < t);
-  const missing = events.filter(e => e.status === "returned" && e.date_to >= addDays(t, -30)).map(e => ({ e, s:shortagesOf(e) })).filter(x => x.s.length);
+  const missing = events.filter(e => e.status === "returned").map(e => ({ e, s:shortagesOf(e) })).filter(x => x.s.length).sort((a, b) => b.e.date_to.localeCompare(a.e.date_to));
   const confl = events.filter(e => isActive(e) && e.date_from <= wk && e.date_to >= t && (conflictsOf(e).length || crewOf(e.id).some(c => crewBusy(c, e).length || (c.user_id && !EV.schedMissing && personIssues(c.user_id, e.date_from, e.date_to).length))));
   const repair = items.filter(i => i.state === "Требует ремонта" || i.state === "В ремонте" || i.status === "Не найдено");
-  const mine = events.filter(e => isActive(e) && e.date_to >= t && isMine(e)).sort((a, b) => a.date_from.localeCompare(b.date_from)).slice(0, 3);
+  const mineAll = events.filter(e => isActive(e) && e.date_to >= t && isMine(e)).sort((a, b) => a.date_from.localeCompare(b.date_from));
+  const shown = new Set([...leaving, ...out, ...notLoaded, ...confl].map(e => e.id));
+  const mine = mineAll.filter(e => !shown.has(e.id)).slice(0, 3);
   const alerts = out.filter(e => e.date_to < t).length + notLoaded.length + missing.length + confl.length;
   $("todayCount").textContent = alerts; $("todayCount").hidden = !alerts;
 
@@ -1556,10 +1575,11 @@ function renderToday(){
     ${nothing ? `<div class="empty"><strong>Сегодня спокойно</strong>Выездов и возвратов нет, всё оборудование на месте.</div>` : ""}
     <div class="tgrid">
       ${card("Требует внимания", (notLoaded.length ? `<p class="hint">Дата прошла, а отгрузка не отмечена:</p>${evs(notLoaded)}` : "") + (confl.length ? `<p class="hint">Не хватает оборудования или люди заняты (ближайшие 2 недели):</p>${evs(confl)}` : ""), "alert", notLoaded.length + confl.length || null)}
-      ${card("Уезжает сегодня и завтра", evs(leaving), "", leaving.length || null)}
+      ${card("Уезжает сегодня", evs(leavingToday), "", leavingToday.length || null)}
+      ${card("Уезжает завтра, " + fmtD(tm, { weekday:"short", day:"numeric", month:"short" }), evs(leavingTom), "", leavingTom.length || null)}
       ${card("На выезде", outRows, "", out.length || null)}
-      ${card("Не вернулось за 30 дней", missRows, "alert", missing.length || null)}
-      ${mine.length ? card("Мои ближайшие выезды", evs(mine)) : ""}
+      ${card("Недостачи — не разобраны", missRows, "alert", missing.length || null)}
+      ${mine.length ? card("Мои следующие выезды", evs(mine)) : ""}
       ${card("Люди сегодня", pplRows)}
       ${card("Ремонт и потери", repRows, "", repair.length || null)}
     </div>`;
@@ -1938,6 +1958,83 @@ async function genVapid(){
 const CAL = { ev:null };
 $("calIcs").onclick = () => { if(CAL.ev) addToCalendar(CAL.ev); $("calScrim").hidden = true; };
 $("calGoogle").addEventListener("click", () => setTimeout(() => $("calScrim").hidden = true, 100));
+
+// =====================================================================
+// ---------- проверка кейса при возврате и разбор недостач ----------
+// =====================================================================
+const KC = { kit:null, counts:new Map() };
+// Кейс неполный, если из него что-то не вернулось и недостача не разобрана.
+function kitIncomplete(kitId){
+  const kl = kitLines(kitId), out = [];
+  events.filter(e => e.status === "returned" && kitsInEvent(e).some(k => k.id === kitId)).forEach(e =>
+    shortagesOf(e).forEach(s => { const x = kl.find(y => y.item_id === s.l.item_id); if(x && s.it) out.push({ it:s.it, n:Math.min(s.miss, +x.qty), e }); }));
+  return out;
+}
+const incText = inc => inc.map(x => `${x.it.name} × ${x.n} (после «${x.e.title}»)`).join(", ");
+
+function openKitCheck(k){
+  const ls = linesOf(PR.ev.id), kl = kitLines(k.id).filter(x => ls.some(l => l.item_id === x.item_id));
+  if(!kl.length) return scanFeedback(false, `Комплекта «${k.name}» нет в списке`);
+  // Если счётчики не обнулялись, кейс уже засчитан целиком — убираем его и считаем заново.
+  if(!PR.zeroed) kl.forEach(x => { const l = ls.find(y => y.item_id === x.item_id); PR.vals.set(l.id, Math.max(0, (PR.vals.get(l.id) || 0) - +x.qty)); });
+  KC.kit = k; KC.counts = new Map();
+  renderProcess(); renderKitCheck();
+  $("kcBox").scrollIntoView({ block:"nearest" });
+  scanFeedback(true, `Кейс «${k.name}»: сканируйте содержимое или нажмите «Всё на месте»`);
+}
+function renderKitCheck(){
+  const box = $("kcBox"); if(!box) return;
+  if(!KC.kit || !PR.ev){ box.hidden = true; return; }
+  const ls = linesOf(PR.ev.id), kl = kitLines(KC.kit.id).filter(x => ls.some(l => l.item_id === x.item_id)).map(x => ({ x, it:itemById(x.item_id) })).filter(o => o.it).sort((a, b) => byName(a.it, b.it));
+  let miss = 0;
+  box.innerHTML = `<div class="kchead"><b>Проверка кейса «${esc(KC.kit.name)}»</b><span class="hint">сканируйте то, что лежит в кейсе</span></div>` +
+    kl.map(({ x, it }) => { const n = KC.counts.get(it.id) || 0, q = +x.qty; if(n < q) miss += q - n;
+      return `<div class="pkrow ${n >= q ? "on" : "bad"}" data-kc="${it.id}"><div class="lname">${esc(it.name)}</div>
+        <div class="pkfree"><b>${n}</b> из ${q}${n < q ? `<span class="neg">не хватает ${q - n}</span>` : " ✓"}</div>
+        <span class="qtyBox sm"><button type="button" data-kca="dec" aria-label="Меньше">−</button><input type="number" value="${n}" readonly aria-label="Найдено"><button type="button" data-kca="inc" aria-label="Больше">+</button></span></div>`; }).join("") +
+    `<div class="kcacts"><button type="button" class="btn" data-kcall>Всё на месте</button><button type="button" class="btn primary" data-kcdone>Готово${miss ? ` — не хватает ${miss}` : ""}</button></div>`;
+  box.hidden = false;
+}
+function kcAdjust(itemId, d){
+  const kq = kitLines(KC.kit.id).find(x => x.item_id === itemId), l = linesOf(PR.ev.id).find(x => x.item_id === itemId); if(!kq || !l) return;
+  const cur = KC.counts.get(itemId) || 0, nv = Math.max(0, Math.min(+kq.qty, cur + d)), delta = nv - cur; if(!delta) return;
+  KC.counts.set(itemId, nv); PR.vals.set(l.id, Math.max(0, (PR.vals.get(l.id) || 0) + delta));
+}
+document.addEventListener("click", e => {
+  if(!KC.kit) return;
+  const b = e.target.closest("[data-kca]");
+  if(b){ kcAdjust(+b.closest("[data-kc]").dataset.kc, b.dataset.kca === "inc" ? 1 : -1); renderProcess(); renderKitCheck(); return; }
+  if(e.target.closest("[data-kcall]")){ kitLines(KC.kit.id).forEach(x => kcAdjust(x.item_id, +x.qty)); renderProcess(); renderKitCheck(); return; }
+  if(e.target.closest("[data-kcdone]")){
+    const miss = kitLines(KC.kit.id).filter(x => (KC.counts.get(x.item_id) || 0) < +x.qty && linesOf(PR.ev.id).some(l => l.item_id === x.item_id))
+      .map(x => `${itemById(x.item_id)?.name || "позиция"} × ${+x.qty - (KC.counts.get(x.item_id) || 0)}`);
+    scanFeedback(!miss.length, miss.length ? `В кейсе «${KC.kit.name}» не хватает: ${miss.join(", ")}` : `Кейс «${KC.kit.name}» полный ✓`);
+    KC.kit = null; renderKitCheck(); renderProcess();
+  }
+});
+$("prZero").addEventListener("click", () => { PR.zeroed = true; if(KC.kit){ KC.counts = new Map(); renderKitCheck(); } });
+
+// «Нашёлся» и «Списать» в карточке мероприятия.
+async function resolveLoss(e, b){
+  const id = +(b.dataset.found || b.dataset.wo), l = lines.find(x => x.id === id), s = shortagesOf(e).find(x => x.l.id === id);
+  if(!l || !s) return;
+  const inp = b.closest("[data-loss]").querySelector(".lossn");
+  const n = Math.max(1, Math.min(s.miss, Math.round(num(inp ? inp.value : s.miss) || s.miss)));
+  const name = s.it ? s.it.name : "позиция";
+  if(b.dataset.found){
+    const { error } = await dbUpdate("event_items", id, { qty_back:s.back + n });
+    if(error){ toast(errText(error)); return; }
+    l.qty_back = s.back + n; toast(`Нашёлся: ${name} × ${n}`);
+  } else {
+    if(!b.classList.contains("armed")){ b.classList.add("armed"); b.textContent = `Списать ${n} со склада?`; return; }
+    const { error } = await sb.rpc("write_off", { line_id:id, n });
+    if(error){ toast(/write_off|function/i.test(error.message || "") && !/менеджер|списать от/i.test(error.message || "") ? "Списание ещё не подключено: выполните 08_losses.sql в Supabase" : errText(error)); return; }
+    l.written_off = (num(l.written_off) || 0) + n;
+    if(s.it) s.it.qty_fact = Math.max(0, (num(s.it.qty_fact) || 0) - n);
+    toast(`Списано: ${name} × ${n}. На складе теперь ${s.it ? num(s.it.qty_fact) : "—"}`);
+  }
+  renderEvents(); renderStock(); renderKits();
+}
 
 // ---------- журнал: записи о мероприятиях ----------
 function evVal(k, v){
