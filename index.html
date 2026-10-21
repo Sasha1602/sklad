@@ -8,7 +8,7 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2316191d'/%3E%3Cpath d='M-4 20 20-4M2 26 26 2M8 32 32 8M14 38 38 14' stroke='%23f2a900' stroke-width='4'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&family=Unbounded:wght@600&display=swap">
-<link rel="stylesheet" href="style.css?v=2026-10-21-crew">
+<link rel="stylesheet" href="style.css?v=2026-10-21-sched">
 </head>
 <body>
 
@@ -68,10 +68,10 @@
       <button type="button" class="tab active" data-tab="stock">Склад</button>
       <button type="button" class="tab" data-tab="events">Мероприятия <span class="badge info" id="outCount" hidden></span></button>
       <button type="button" class="tab" data-tab="log">Журнал</button>
-      <button type="button" class="tab" data-tab="users" id="usersTab" hidden>Пользователи <span class="badge" id="pendingCount" hidden></span></button>
+      <button type="button" class="tab" data-tab="users" id="usersTab" hidden>Люди <span class="badge" id="pendingCount" hidden></span></button>
     </nav>
     <div class="who"><span class="live" id="live"><span class="dot"></span><span id="liveText">…</span></span>
-      <span class="me"><span id="meName"></span> <span class="role" id="meRole"></span></span>
+      <span class="me"><button type="button" class="link me-btn" id="meName" title="Мой график занятости"></button> <span class="role" id="meRole"></span></span>
       <button class="btn ghost" type="button" data-logout>Выйти</button></div>
   </div></header>
 
@@ -135,6 +135,24 @@
 
     <!-- Пользователи -->
     <section id="tab-users" hidden>
+      <div class="avhead">
+        <h3 class="sect" style="margin:0">Кто свободен</h3>
+        <div class="monthNav">
+          <button type="button" class="btn ghost icon" id="avPrev" aria-label="Раньше">‹</button>
+          <b id="avTitle"></b>
+          <button type="button" class="btn ghost icon" id="avNext" aria-label="Позже">›</button>
+          <button type="button" class="btn ghost" id="avToday">Сегодня</button>
+        </div>
+      </div>
+      <div class="avwrap"><table class="av" id="avTable"></table></div>
+      <div class="avlegend">
+        <span><i class="cell shift"></i>смена на основной работе</span>
+        <span><i class="cell busy"></i>недоступен</span>
+        <span><i class="cell vac"></i>отпуск на основной — свободен</span>
+        <span><i class="cell ev"></i>на мероприятии</span>
+        <span class="hint">Нажмите на имя, чтобы настроить график.</span>
+      </div>
+      <h3 class="sect">Сотрудники и роли</h3>
       <div class="card flat"><div id="userList"></div></div>
       <div class="legend">
         <h3>Что может каждая роль</h3>
@@ -145,7 +163,7 @@
           <dt><span class="role r-manager">Менеджер</span></dt><dd>Полный доступ к оборудованию и мероприятиям: создаёт, редактирует, бронирует, назначает команду, удаляет.</dd>
           <dt><span class="role r-admin">Администратор</span></dt><dd>Всё, что менеджер, плюс назначает роли пользователям.</dd>
         </dl>
-        <p class="hint">Права проверяет сама база, поэтому обойти их через браузер нельзя. Свою роль администратор поменять не может, а последнего администратора нельзя понизить.</p>
+        <p class="hint">Графики занятости может менять менеджер, администратор и сам сотрудник (свой — через клик по своему имени вверху). Права проверяет сама база, поэтому обойти их через браузер нельзя. Свою роль администратор поменять не может, а последнего администратора нельзя понизить.</p>
       </div>
     </section>
   </main>
@@ -202,6 +220,38 @@
       <button type="button" class="btn" data-close="evScrim">Отмена</button>
     </div>
   </form>
+</div>
+
+<!-- ============ График сотрудника ============ -->
+<div class="scrim" id="scScrim" hidden>
+  <div class="sheet">
+    <h3 class="h2" id="scTitle">График</h3>
+    <form id="scForm" novalidate>
+      <label class="check" style="margin-bottom:10px"><input type="checkbox" id="s_on"> Есть основная работа по сменному графику</label>
+      <div class="grid" id="scFields">
+        <label class="full">Название<input id="s_label" class="field" placeholder="Основная работа"></label>
+        <label>Рабочих дней подряд<input id="s_work" class="field" type="number" min="1" max="14" inputmode="numeric"></label>
+        <label>Затем выходных<input id="s_off" class="field" type="number" min="0" max="28" inputmode="numeric"></label>
+        <label class="full">Дата любой смены (например, последней)<input id="s_anchor" class="field" type="date"></label>
+      </div>
+      <p class="hint" id="scPreview" style="margin-top:10px"></p>
+      <div class="actions"><button type="submit" class="btn primary" id="scSave">Сохранить график</button></div>
+    </form>
+    <h3 class="sect" style="margin-top:20px">Исключения</h3>
+    <div id="scPeriods" class="periods"></div>
+    <form id="spForm" class="grid" novalidate style="margin-top:10px">
+      <label class="full">Что<select id="p_kind" class="field">
+        <option value="free">Отпуск / больничный на основной работе — график не действует, свободен</option>
+        <option value="busy">Недоступен совсем — уехал, болеет, занят</option>
+      </select></label>
+      <label>С<input id="p_from" class="field" type="date"></label>
+      <label>По (включительно)<input id="p_to" class="field" type="date"></label>
+      <label class="full">Комментарий<input id="p_note" class="field" placeholder="Отпуск на основной работе"></label>
+      <div class="full"><button type="submit" class="btn">+ Добавить период</button></div>
+    </form>
+    <div class="msg" id="scErr" hidden></div>
+    <div class="actions"><button type="button" class="btn" data-close="scScrim">Закрыть</button></div>
+  </div>
 </div>
 
 <!-- ============ Человек в команду ============ -->

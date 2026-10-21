@@ -54,7 +54,7 @@ if(window.SKLAD_LIB_FAILED || !window.supabase){
 }
 const sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_KEY, { auth:{ persistSession:true, autoRefreshToken:true, detectSessionInUrl:true } });
 
-let me = null, items = [], profiles = {}, logRows = [], events = [], lines = [], crew = [], channel = null, started = false, recovering = false;
+let me = null, items = [], profiles = {}, logRows = [], events = [], lines = [], crew = [], schedules = [], periods = [], channel = null, started = false, recovering = false;
 
 opts($("fCat"), CATS, true); opts($("fState"), Object.keys(STATES), true); opts($("fStatus"), Object.keys(STATUSES), true);
 opts($("e_category"), CATS); opts($("e_state"), Object.keys(STATES)); opts($("e_status"), Object.keys(STATUSES)); opts($("e_unit"), UNITS);
@@ -129,22 +129,26 @@ async function startApp(){
   show("appView");
   $("meName").textContent = me.full_name || me.email;
   $("meRole").textContent = ROLES[me.role]; $("meRole").className = "role r-" + me.role;
-  $("usersTab").hidden = !can("admin");
+  $("usersTab").hidden = !can("manager");
+  $("meName").onclick = () => openSchedule(me.id);
   $("addBtn").hidden = !can("manager");
 
-  const [it, pr, lg, ev, el, cr] = await Promise.all([
+  const [it, pr, lg, ev, el, cr, ss, sp] = await Promise.all([
     sb.from("items").select("*").order("id"),
     sb.from("profiles").select("*").order("created_at"),
     sb.from("item_log").select("*").order("created_at", { ascending:false }).limit(300),
     sb.from("events").select("*").order("date_from"),
     sb.from("event_items").select("*").order("id"),
-    sb.from("event_crew").select("*").order("id")
+    sb.from("event_crew").select("*").order("id"),
+    sb.from("staff_schedule").select("*"),
+    sb.from("staff_periods").select("*").order("date_from")
   ]);
   if(it.error){ toast(errText(it.error)); }
   items = it.data || []; logRows = lg.data || [];
   (pr.data || []).forEach(p => profiles[p.id] = p);
   if(ev.error || el.error){ EV.missing = true; } else { events = ev.data || []; lines = el.data || []; }
   if(cr.error){ EV.crewMissing = true; } else crew = cr.data || [];
+  if(ss.error || sp.error){ EV.schedMissing = true; } else { schedules = ss.data || []; periods = sp.data || []; }
   renderStock(); renderLog(); renderUsers(); renderEvents();
   subscribe();
   const h = location.hash.slice(1);
@@ -174,8 +178,16 @@ function subscribe(){
     .on("postgres_changes", { event:"*", schema:"public", table:"event_items" }, p => {
       lines = upsertRow(lines, p); renderEvents(); renderStock();
     })
+    .on("postgres_changes", { event:"*", schema:"public", table:"staff_schedule" }, p => {
+      if(p.eventType === "DELETE") schedules = schedules.filter(x => x.user_id !== p.old.user_id);
+      else { const k = schedules.findIndex(x => x.user_id === p.new.user_id); if(k >= 0) schedules[k] = p.new; else schedules.push(p.new); }
+      renderUsers(); renderEvents(); if(!$("scScrim").hidden) renderScheduleSheet();
+    })
+    .on("postgres_changes", { event:"*", schema:"public", table:"staff_periods" }, p => {
+      periods = upsertRow(periods, p); renderUsers(); renderEvents(); if(!$("scScrim").hidden) renderScheduleSheet();
+    })
     .on("postgres_changes", { event:"*", schema:"public", table:"event_crew" }, p => {
-      crew = upsertRow(crew, p); renderEvents();
+      crew = upsertRow(crew, p); renderEvents(); renderUsers();
     })
     .on("postgres_changes", { event:"INSERT", schema:"public", table:"item_log" }, p => {
       logRows.unshift(p.new); logRows = logRows.slice(0, 300); renderLog();
@@ -194,12 +206,18 @@ function subscribe(){
 
 // ---------- вкладки ----------
 function setTab(t){
-  if(t === "users" && !can("admin")) t = "stock";
+  if(t === "users" && !can("manager")) t = "stock";
   document.querySelectorAll("#mainTabs .tab").forEach(b => b.classList.toggle("active", b.dataset.tab === t));
   ["stock","events","log","users"].forEach(x => $("tab-" + x).hidden = x !== t);
   if(t === "events" && EV.open){ history.replaceState(null, "", "#ev-" + EV.open); }
   else history.replaceState(null, "", "#" + t);
 }
+window.addEventListener("hashchange", () => {
+  if(!me) return;
+  const h = location.hash.slice(1);
+  if(/^ev-\d+$/.test(h)) openEvent(+h.slice(3));
+  else if(["stock","events","log","users"].includes(h)){ if(h === "events") EV.open = null; setTab(h); renderEvents(); }
+});
 document.querySelectorAll("#mainTabs .tab").forEach(b => b.onclick = () => {
   if(b.dataset.tab === "events" && b.classList.contains("active") && EV.open){ closeEvent(); return; }
   setTab(b.dataset.tab);
@@ -307,7 +325,7 @@ $("scrim").addEventListener("mousedown", e => { if(e.target === $("scrim")) clos
 document.addEventListener("keydown", e => {
   if(e.key !== "Escape") return;
   if(!$("scrim").hidden) closeEditor();
-  ["evScrim","pkScrim","prScrim","crScrim"].forEach(id => $(id).hidden = true);
+  ["evScrim","pkScrim","prScrim","crScrim","scScrim"].forEach(id => $(id).hidden = true);
 });
 $("form").addEventListener("submit", async e => {
   e.preventDefault();
@@ -352,15 +370,20 @@ $("logList").addEventListener("click", e => { const a = e.target.closest("[data-
 
 // ---------- пользователи ----------
 function renderUsers(){
-  if(!can("admin")) return;
-  const list = Object.values(profiles).sort((a,b) => (a.role === "pending" ? -1 : 0) - (b.role === "pending" ? -1 : 0) || new Date(a.created_at) - new Date(b.created_at));
+  if(!can("manager")) return;
+  const A = can("admin");
+  const list = Object.values(profiles).sort((a,b) => (a.role === "pending" ? -1 : 0) - (b.role === "pending" ? -1 : 0) || (a.full_name || "").localeCompare(b.full_name || "", "ru"));
   const pend = list.filter(p => p.role === "pending").length;
-  $("pendingCount").textContent = pend; $("pendingCount").hidden = !pend;
+  $("pendingCount").textContent = pend; $("pendingCount").hidden = !pend || !A;
   $("userList").innerHTML = list.map(p => `<div class="urow${p.role === "pending" ? " pend" : ""}" data-uid="${p.id}">
-    <div><div class="nm">${esc(p.full_name || "Без имени")}${p.id === me.id ? " (вы)" : ""}</div><div class="em">${esc(p.email || "")} · с ${new Date(p.created_at).toLocaleDateString("ru-RU")}</div></div>
-    <select class="field" data-uid="${p.id}" aria-label="Роль" ${p.id === me.id ? "disabled" : ""}>${Object.keys(ROLES).map(r => `<option value="${r}" ${r === p.role ? "selected" : ""}>${ROLES[r]}</option>`).join("")}</select>
+    <div><div class="nm">${esc(p.full_name || "Без имени")}${p.id === me.id ? " (вы)" : ""}</div><div class="em">${esc(p.email || "")} · с ${new Date(p.created_at).toLocaleDateString("ru-RU")}</div>
+      ${p.role !== "pending" ? `<div class="em">${esc(scheduleSummary(p.id))}</div>` : ""}</div>
+    <div class="uact">${p.role !== "pending" && !EV.schedMissing ? `<button type="button" class="btn sm" data-sched="${p.id}">График</button>` : ""}
+    <select class="field" data-uid="${p.id}" aria-label="Роль" ${p.id === me.id || !A ? "disabled" : ""}>${Object.keys(ROLES).map(r => `<option value="${r}" ${r === p.role ? "selected" : ""}>${ROLES[r]}</option>`).join("")}</select></div>
   </div>`).join("");
+  renderAvail();
 }
+$("userList").addEventListener("click", e => { const b = e.target.closest("[data-sched]"); if(b) openSchedule(b.dataset.sched); });
 $("userList").addEventListener("change", async e => {
   const sel = e.target; if(!sel.dataset.uid) return;
   const uid = sel.dataset.uid, prev = profiles[uid].role;
@@ -525,7 +548,7 @@ function renderDayPanel(){
 function evCard(e){
   const ls = linesOf(e.id), units = ls.reduce((a, l) => a + lineQty(l, e), 0);
   const c = conflictsOf(e), s = shortagesOf(e), d = dparse(e.date_from), resp = personName(e.responsible), cr = crewOf(e.id);
-  const busyN = cr.filter(x => crewBusy(x, e).length).length;
+  const busyN = cr.filter(x => crewBusy(x, e).length || (x.user_id && !EV.schedMissing && personIssues(x.user_id, e.date_from, e.date_to).length)).length;
   const tags = [`<span class="chip ${evSt(e).c}">${evSt(e).t}</span>`, `<span class="cnt">${ls.length} поз. · ${units} ед.</span>`];
   if(c.length) tags.push(`<span class="chip c-bad">Не хватает: ${c.length} поз.</span>`);
   if(s.length) tags.push(`<span class="chip c-bad">Не вернулось: ${s.reduce((a, x) => a + x.miss, 0)} ед.</span>`);
@@ -649,11 +672,13 @@ function crewSection(e){
   const M = can("manager"), cr = crewOf(e.id).sort((a, b) => (a.job || "я").localeCompare(b.job || "я", "ru") || crewName(a).localeCompare(crewName(b), "ru"));
   const rows = cr.map(c => {
     const busy = isActive(e) ? crewBusy(c, e) : [];
+    const iss = isActive(e) && c.user_id && !EV.schedMissing ? personIssues(c.user_id, e.date_from, e.date_to) : [];
     const ph = c.phone || "";
-    return `<div class="crow${busy.length ? " bad" : ""}" data-crew="${c.id}">
+    return `<div class="crow${busy.length || iss.length ? " bad" : ""}" data-crew="${c.id}">
       <div class="cwho"><b>${esc(crewName(c))}</b>${c.user_id === me.id ? ` <span class="chip xs c-info">вы</span>` : ""}${c.job ? ` <span class="job">${esc(c.job)}</span>` : ""}
         ${c.note ? `<div class="sub">${esc(c.note)}</div>` : ""}
-        ${busy.length ? `<div class="neg cwarn">В эти даты также на ${busy.map(o => `<a href="#ev-${o.id}" data-ev="${o.id}">«${esc(o.title)}»</a>`).join(", ")}</div>` : ""}</div>
+        ${busy.length ? `<div class="neg cwarn">В эти даты также на ${busy.map(o => `<a href="#ev-${o.id}" data-ev="${o.id}">«${esc(o.title)}»</a>`).join(", ")}</div>` : ""}
+        ${iss.length ? `<div class="neg cwarn">${esc(issuesText(iss))}</div>` : ""}</div>
       <div class="cphone">${ph ? `<a href="tel:${esc(ph.replace(/[^+\d]/g, ""))}">${esc(ph)}</a>` : ""}</div>
       <div class="lx">${M ? `<button type="button" class="edit" data-crdel="${c.id}" aria-label="Убрать из команды" title="Убрать из команды">✕</button>` : ""}</div>
     </div>`;
@@ -902,8 +927,9 @@ function openCrew(e){
   const taken = new Set(crewOf(e.id).filter(c => c.user_id).map(c => c.user_id));
   const staff = Object.values(profiles).filter(p => LV[p.role] >= LV.viewer && !taken.has(p.id)).sort((a, b) => (a.full_name || "").localeCompare(b.full_name || "", "ru"));
   $("c_user").innerHTML = staff.length ? staff.map(p => {
-    const busy = crewBusy({ user_id:p.id }, e);
-    return `<option value="${p.id}">${esc(p.full_name || p.email)}${busy.length ? " — занят: «" + esc(busy[0].title) + "»" : ""}</option>`;
+    const busy = crewBusy({ user_id:p.id }, e), iss = EV.schedMissing ? [] : personIssues(p.id, e.date_from, e.date_to);
+    const why = busy.length ? "на «" + busy[0].title + "»" : iss.length ? (iss[0].t === "shift" ? "смена " + fmtD(iss[0].k) : "недоступен") : "";
+    return `<option value="${p.id}">${esc(p.full_name || p.email)}${why ? " — " + esc(why) : " — свободен"}</option>`;
   }).join("") : `<option value="">Все сотрудники уже в команде</option>`;
   ["c_name","c_phone","c_job","c_note"].forEach(id => $(id).value = "");
   $("crHint").textContent = `«${e.title}», ${fmtRange(e)}`;
@@ -928,6 +954,193 @@ $("evMine").addEventListener("change", () => { EV.mine = $("evMine").checked; tr
 
 document.querySelectorAll("[data-close]").forEach(b => b.onclick = () => $(b.dataset.close).hidden = true);
 ["evScrim","pkScrim","prScrim","crScrim"].forEach(id => $(id).addEventListener("mousedown", e => { if(e.target === $(id)) $(id).hidden = true; }));
+
+// =====================================================================
+// ---------- графики сотрудников ----------
+// =====================================================================
+const dayMs = 864e5;
+const addDays = (k, n) => { const d = dparse(k); d.setDate(d.getDate() + n); return dkey(d); };
+const dayDiff = (a, b) => Math.round((dparse(a) - dparse(b)) / dayMs);
+const scheduleOf = uid => schedules.find(x => x.user_id === uid);
+const periodsOf = uid => periods.filter(p => p.user_id === uid).sort((a, b) => a.date_from.localeCompare(b.date_from));
+
+// Что у человека в этот день по графику: null — свободен.
+function personDay(uid, k){
+  const ps = periods.filter(p => p.user_id === uid && p.date_from <= k && p.date_to >= k);
+  const busy = ps.find(p => p.kind === "busy");
+  if(busy) return { t:"busy", why:busy.note || "Недоступен" };
+  const sc = scheduleOf(uid);
+  if(sc){
+    const vac = ps.find(p => p.kind === "free");
+    const cyc = sc.work_days + sc.off_days, m = ((dayDiff(k, sc.anchor) % cyc) + cyc) % cyc;
+    if(m < sc.work_days) return vac ? { t:"vac", why:vac.note || "Отпуск на основной работе" } : { t:"shift", why:(sc.label || "Основная работа") + " — смена" };
+    if(vac) return { t:"vac", why:vac.note || "Отпуск на основной работе" };
+  }
+  return null;
+}
+// Проблемные дни человека в диапазоне дат (смены и недоступность).
+function personIssues(uid, from, to){
+  const res = [];
+  for(let k = from; k <= to; k = addDays(k, 1)){ const d = personDay(uid, k); if(d && (d.t === "shift" || d.t === "busy")) res.push({ k, ...d }); }
+  return res;
+}
+function nextShifts(uid, n){
+  const res = [], sc = scheduleOf(uid); if(!sc) return res;
+  for(let i = 0, k = todayKey(); i < 400 && res.length < n; i++, k = addDays(k, 1)){ const d = personDay(uid, k); if(d && d.t === "shift") res.push(k); }
+  return res;
+}
+function scheduleSummary(uid){
+  if(EV.schedMissing) return "";
+  const sc = scheduleOf(uid), now = todayKey();
+  const parts = [];
+  if(sc){ const nx = nextShifts(uid, 1); parts.push(`${sc.label || "Основная работа"}: ${sc.work_days}/${sc.off_days}` + (nx.length ? `, ближайшая смена ${fmtD(nx[0])}` : "")); }
+  const cur = periodsOf(uid).filter(p => p.date_to >= now).slice(0, 2).map(p => `${p.kind === "free" ? "отпуск на основной" : "недоступен"} ${fmtD(p.date_from)}–${fmtD(p.date_to)}`);
+  parts.push(...cur);
+  return parts.length ? parts.join(" · ") : "График не задан";
+}
+function issuesText(iss){
+  if(!iss.length) return "";
+  const shifts = iss.filter(x => x.t === "shift").map(x => fmtD(x.k)), busy = iss.filter(x => x.t === "busy");
+  const out = [];
+  if(shifts.length) out.push(`Смена на основной работе: ${shifts.join(", ")}`);
+  if(busy.length) out.push(`Недоступен ${busy.map(x => fmtD(x.k)).join(", ")}${busy[0].why ? " (" + busy[0].why + ")" : ""}`);
+  return out.join(". ");
+}
+
+// ---------- таблица «Кто свободен» ----------
+const AV = { start:null, days:21 };
+function renderAvail(){
+  if(!$("avTable") || !can("manager")) return;
+  if(!AV.start) AV.start = todayKey();
+  const ppl = Object.values(profiles).filter(p => LV[p.role] >= LV.viewer).sort((a, b) => (a.full_name || "").localeCompare(b.full_name || "", "ru"));
+  const days = Array.from({ length:AV.days }, (_, i) => addDays(AV.start, i)), t = todayKey();
+  $("avTitle").textContent = `${fmtD(days[0])} – ${fmtD(days[days.length - 1])}`;
+  if(EV.schedMissing){ $("avTable").innerHTML = `<tr><td class="hint" style="padding:14px">Чтобы вести графики, выполните в Supabase файл <code>supabase/04_schedule.sql</code>.</td></tr>`; return; }
+  const head = `<tr><th class="nmcol"></th>${days.map(k => { const d = dparse(k), we = d.getDay() === 0 || d.getDay() === 6;
+    return `<th class="${we ? "we" : ""}${k === t ? " today" : ""}"><small>${d.toLocaleDateString("ru-RU", { weekday:"short" })}</small>${d.getDate()}</th>`; }).join("")}</tr>`;
+  const rows = ppl.map(p => `<tr><th class="nmcol"><button type="button" class="link" data-sched="${p.id}">${esc(p.full_name || p.email)}</button></th>${days.map(k => {
+    const d = personDay(p.id, k);
+    const evs = events.filter(e => isActive(e) && e.date_from <= k && e.date_to >= k && crewOf(e.id).some(c => c.user_id === p.id));
+    const cls = [d ? d.t : "", evs.length ? "ev" : "", (evs.length && d && (d.t === "shift" || d.t === "busy")) ? "clash" : "", k === t ? "today" : ""].filter(Boolean).join(" ");
+    const tip = [d ? d.why : "", ...evs.map(e => "Мероприятие: " + e.title)].filter(Boolean).join("\n") || "Свободен";
+    const label = evs.length ? (evs.length > 1 ? evs.length : esc(evs[0].title.slice(0, 2))) : (d && d.t === "shift" ? "С" : d && d.t === "busy" ? "—" : "");
+    return `<td class="${cls}" title="${esc(fmtD(k, { weekday:"short", day:"numeric", month:"short" }) + ": " + tip)}"${evs.length === 1 ? ` data-ev="${evs[0].id}"` : ""}>${label}</td>`;
+  }).join("")}</tr>`).join("");
+  $("avTable").innerHTML = `<thead>${head}</thead><tbody>${rows}</tbody>`;
+}
+$("avPrev").onclick = () => { AV.start = addDays(AV.start || todayKey(), -7); renderAvail(); };
+$("avNext").onclick = () => { AV.start = addDays(AV.start || todayKey(), 7); renderAvail(); };
+$("avToday").onclick = () => { AV.start = todayKey(); renderAvail(); };
+$("avTable").addEventListener("click", e => {
+  const b = e.target.closest("[data-sched]"); if(b){ openSchedule(b.dataset.sched); return; }
+  const c = e.target.closest("td[data-ev]"); if(c) openEvent(+c.dataset.ev);
+});
+
+// ---------- окно графика ----------
+const SC = { uid:null };
+function canEditSchedule(uid){ return can("manager") || (uid === me.id && can("viewer")); }
+function openSchedule(uid){
+  if(EV.schedMissing){ toast("Графики ещё не подключены: нужно выполнить 04_schedule.sql в Supabase"); return; }
+  SC.uid = uid;
+  const sc = scheduleOf(uid);
+  $("s_on").checked = !!sc;
+  $("s_label").value = sc ? sc.label || "" : "Основная работа";
+  $("s_work").value = sc ? sc.work_days : 1; $("s_off").value = sc ? sc.off_days : 3;
+  $("s_anchor").value = sc ? sc.anchor : "";
+  $("p_kind").value = "free"; $("p_from").value = todayKey(); $("p_to").value = ""; $("p_note").value = "";
+  $("scErr").hidden = true; renderScheduleSheet(); $("scScrim").hidden = false;
+}
+function renderScheduleSheet(){
+  const uid = SC.uid, ed = canEditSchedule(uid), p = profiles[uid];
+  $("scTitle").textContent = "График: " + (p ? p.full_name || p.email : "сотрудник");
+  $("scFields").hidden = !$("s_on").checked;
+  [...$("scForm").elements, ...$("spForm").elements].forEach(el => el.disabled = !ed);
+  $("scSave").hidden = !ed; $("spForm").hidden = !ed;
+  // предпросмотр по введённым значениям
+  if($("s_on").checked && +$("s_work").value > 0 && $("s_anchor").value){
+    const tmp = { user_id:uid, label:$("s_label").value, work_days:+$("s_work").value, off_days:+$("s_off").value || 0, anchor:$("s_anchor").value };
+    const saved = schedules; schedules = [...schedules.filter(x => x.user_id !== uid), tmp];
+    const nx = nextShifts(uid, 6); schedules = saved;
+    $("scPreview").textContent = nx.length ? "Ближайшие смены (с учётом исключений): " + nx.map(k => fmtD(k, { weekday:"short", day:"numeric", month:"short" })).join(", ") : "Ближайших смен нет.";
+  } else $("scPreview").textContent = $("s_on").checked ? "Укажите график и дату смены — здесь появятся ближайшие смены." : "Сменной работы нет — человек свободен, кроме периодов «недоступен».";
+  const ps = periodsOf(uid);
+  $("scPeriods").innerHTML = ps.length ? ps.map(x => `<div class="prow${x.date_to < todayKey() ? " past" : ""}">
+      <span class="chip ${x.kind === "free" ? "c-ok" : "c-bad"} xs">${x.kind === "free" ? "отпуск на основной" : "недоступен"}</span>
+      <b>${fmtD(x.date_from)} – ${fmtD(x.date_to, { day:"numeric", month:"short", year:"numeric" })}</b>${x.note ? ` <span class="muted">${esc(x.note)}</span>` : ""}
+      ${ed ? `<button type="button" class="edit" data-pdel="${x.id}" aria-label="Удалить период">✕</button>` : ""}</div>`).join("")
+    : `<p class="hint">Исключений нет.</p>`;
+}
+["s_on","s_work","s_off","s_anchor","s_label"].forEach(id => $(id).addEventListener("input", renderScheduleSheet));
+$("scForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const err = t => { $("scErr").textContent = t; $("scErr").hidden = false; };
+  $("scErr").hidden = true;
+  if(!$("s_on").checked){
+    const { error } = await sb.from("staff_schedule").delete().eq("user_id", SC.uid);
+    if(error) return err(errText(error));
+    schedules = schedules.filter(x => x.user_id !== SC.uid);
+  } else {
+    const d = { user_id:SC.uid, label:$("s_label").value.trim() || "Основная работа", work_days:Math.round(+$("s_work").value), off_days:Math.round(+$("s_off").value || 0), anchor:$("s_anchor").value };
+    if(!(d.work_days >= 1 && d.work_days <= 14)) return err("Рабочих дней подряд — от 1 до 14.");
+    if(!(d.off_days >= 0 && d.off_days <= 28)) return err("Выходных — от 0 до 28.");
+    if(!d.anchor) return err("Укажите дату любой смены.");
+    const { error } = await sb.from("staff_schedule").upsert(d);
+    if(error) return err(errText(error));
+    const k = schedules.findIndex(x => x.user_id === SC.uid); if(k >= 0) schedules[k] = { ...schedules[k], ...d }; else schedules.push(d);
+  }
+  toast("График сохранён"); renderScheduleSheet(); renderUsers(); renderEvents();
+});
+$("p_from").addEventListener("change", () => { if(!$("p_to").value || $("p_to").value < $("p_from").value) $("p_to").value = $("p_from").value; });
+$("spForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const err = t => { $("scErr").textContent = t; $("scErr").hidden = false; };
+  const d = { user_id:SC.uid, kind:$("p_kind").value, date_from:$("p_from").value, date_to:$("p_to").value || $("p_from").value, note:$("p_note").value.trim() || null };
+  if(!d.date_from) return err("Укажите, с какого числа.");
+  if(d.date_to < d.date_from) return err("«По» не может быть раньше «С».");
+  const res = await sb.from("staff_periods").insert(d).select().single();
+  if(res.error) return err(errText(res.error));
+  if(res.data && !periods.find(x => x.id === res.data.id)) periods.push(res.data);
+  $("p_note").value = ""; $("scErr").hidden = true; toast("Период добавлен"); renderScheduleSheet(); renderUsers(); renderEvents();
+});
+$("scPeriods").addEventListener("click", async e => {
+  const b = e.target.closest("[data-pdel]"); if(!b) return;
+  const { error } = await sb.from("staff_periods").delete().eq("id", +b.dataset.pdel);
+  if(error){ toast(errText(error)); return; }
+  periods = periods.filter(x => x.id !== +b.dataset.pdel); renderScheduleSheet(); renderUsers(); renderEvents();
+});
+$("scScrim").addEventListener("mousedown", e => { if(e.target === $("scScrim")) $("scScrim").hidden = true; });
+
+// ---------- маска телефона: +7 (9XX) XXX-XX-XX ----------
+function phoneCore(v){
+  let d = String(v || "").replace(/\D/g, "");
+  if(d[0] === "7" || d[0] === "8") d = d.slice(1);                  // код страны (+7 или 8)
+  if(d.length > 10 && (d[0] === "7" || d[0] === "8")) d = d.slice(1); // вставили «+7 8900…» целиком
+  return d.slice(0, 10);
+}
+function phoneFmt(d){
+  if(!d) return "";
+  let r = "+7 (" + d.slice(0, 3);
+  if(d.length >= 3) r += ")";
+  if(d.length > 3) r += " " + d.slice(3, 6);
+  if(d.length > 6) r += "-" + d.slice(6, 8);
+  if(d.length > 8) r += "-" + d.slice(8, 10);
+  return r;
+}
+function phoneMask(inp){
+  let prev = phoneCore(inp.value);
+  inp.addEventListener("input", e => {
+    let d = phoneCore(inp.value);
+    const del = (e.inputType || "").startsWith("delete");
+    if(del && d.length >= prev.length && prev.length) d = prev.slice(0, -1);   // стёрли скобку или дефис — стираем и цифру
+    if(!d && !del && /\d/.test(inp.value)){ inp.value = "+7 "; prev = ""; inp._pfx = true; return; }   // начали с 7 или 8 — это код страны
+    if(!prev && !del && !inp._pfx && (d === "7" || d === "8")){ inp.value = "+7 "; inp._pfx = true; return; } // «+7 » уже стоит, ввели 8
+    if(!d){ inp.value = del ? "" : "+7 "; prev = ""; inp._pfx = false; return; }
+    inp.value = phoneFmt(d); prev = d;
+  });
+  inp.addEventListener("focus", () => { if(!inp.value){ inp.value = "+7 "; inp._pfx = false; } prev = phoneCore(inp.value); });
+  inp.addEventListener("blur", () => { if(!phoneCore(inp.value)) inp.value = ""; });
+}
+phoneMask($("c_phone"));
 
 // ---------- журнал: записи о мероприятиях ----------
 function evVal(k, v){
