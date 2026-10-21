@@ -360,7 +360,7 @@ table.av{border-collapse:collapse;font-size:12.5px;width:100%;font-variant-numer
   .barIn .brand .tape{width:24px;height:16px}
   .barIn .brand h1{font-size:14px;overflow:hidden;text-overflow:ellipsis}
   .who{grid-column:2;grid-row:1;width:auto;margin:0;gap:6px;flex-wrap:nowrap;min-width:0}
-  .who .live #liveText{display:none}
+  .who .live.on #liveText{display:none}
   .who .me{display:flex;align-items:center;gap:6px;min-width:0}
   .me-btn{max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
   .who .role{font-size:10.5px;padding:2px 7px}
@@ -471,7 +471,7 @@ table.av{border-collapse:collapse;font-size:12.5px;width:100%;font-variant-numer
   #mainTabs::-webkit-scrollbar{display:none}
   #mainTabs .tab{flex:1 0 auto;justify-content:center;padding:6px 10px}
   .who{width:100%;flex-wrap:nowrap;gap:8px;margin-left:0}
-  .who .live #liveText{display:none}
+  .who .live.on #liveText{display:none}
   .me{min-width:0;flex:1;display:flex;align-items:center;gap:6px;overflow:hidden}
   .me-btn{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .me .role{flex:none}
@@ -486,3 +486,109 @@ table.av{border-collapse:collapse;font-size:12.5px;width:100%;font-variant-numer
   .av .nmcol .link{font-size:12.5px;text-align:left}
   .av th,.av td{min-width:30px;height:32px}
 }
+
+/* календарь: заметные дни с мероприятиями */
+.cal-d.has .dn{color:var(--fg)}
+.banner.mine{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;margin-bottom:0}
+.banner.mine .link{color:inherit;font-weight:700;font-size:14px}
+#evList .banner.mine{margin-bottom:14px}
+@media (max-width:640px){
+  .cal-d{min-height:54px;gap:3px}
+  .cal-d.has .dn{background:var(--info-bg);color:var(--info);border-radius:999px;margin-left:3px;padding:0 6px}
+  .cal-d.today.has .dn{background:var(--accent);color:var(--accent-ink)}
+  .evchip{height:7px;line-height:7px;margin:0 2px;border-radius:4px}
+  .evchip.st-planned{background:var(--info)} .evchip.st-out{background:var(--warn)} .evchip.st-returned{background:var(--ok)}
+  .evchip.warn.s{box-shadow:none;background:var(--bad)}
+  .cal-d .more{font-size:10px;padding:0 4px}
+}
+
+/* =================== Сегодня =================== */
+#tab-today{padding-top:18px}
+.thead{display:flex;align-items:baseline;gap:6px 14px;flex-wrap:wrap;margin-bottom:16px}
+.thead .evh{margin:0}
+.thead .muted::first-letter{text-transform:uppercase}
+.tgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr));gap:14px;align-items:start}
+.tcard{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.tcard.alert{border-color:var(--bad);box-shadow:inset 3px 0 0 var(--bad)}
+.tcard h3{margin:0;font-size:13px;text-transform:uppercase;letter-spacing:.06em;display:flex;align-items:center;gap:8px}
+.tcnt{font-family:var(--f-mono);font-size:12px;background:var(--surface-2);border:1px solid var(--line);border-radius:999px;padding:0 8px;letter-spacing:0}
+.tcard.alert h3{color:var(--bad)}
+.tcard .hint{margin:0}
+.trow{display:flex;gap:10px;align-items:center;justify-content:space-between;width:100%;text-align:left;background:transparent;border:0;border-top:1px solid var(--line);padding:9px 2px;color:var(--fg)}
+.tcard h3+.trow{border-top:0}
+.trow:not(.static):hover{background:var(--surface-2)}
+.trow.bad .tmain b{color:var(--bad)}
+.tmain{display:flex;flex-direction:column;min-width:0}
+.tmain b{font-weight:600;overflow-wrap:anywhere}
+.tmain small{font-size:12.5px;color:var(--muted);overflow-wrap:anywhere}
+.ttag{flex:none;font-size:12.5px;text-align:right}
+
+/* =================== Комплекты =================== */
+.stockseg{margin:18px 0 0;display:inline-flex}
+#stockMain .stats{margin-top:14px}
+#kitsView,#labelsView{padding-top:14px}
+.kithead{align-items:center}
+.kithead .hint{max-width:640px}
+.kitgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:14px;align-items:start}
+.group.kit{margin:0}
+.group.kit.focus{box-shadow:0 0 0 3px var(--accent)}
+.group.kit .ghead{align-items:center}
+.kitbtns{margin-left:auto;display:flex;gap:6px}
+.kitbtns .btn.sm{margin-left:0}
+.kitmeta{display:flex;flex-wrap:wrap;gap:4px 12px;padding:8px 14px 0;font-size:13px;align-items:center}
+.kitmeta .mono{font-size:12px;color:var(--muted)}
+.kitlist{padding:6px 14px 12px}
+.kitrow{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px dashed var(--line);font-size:14px}
+.kitrow:last-child{border-bottom:0}
+.kitrow .maker{color:var(--muted)}
+
+/* =================== Этикетки =================== */
+.lbbar{align-items:center}
+.lbtools{display:flex;align-items:center;gap:10px 16px;flex-wrap:wrap;margin-bottom:10px}
+.lbpick{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);max-height:min(65vh,640px);overflow:auto;margin-bottom:10px}
+.lbrow{display:grid;grid-template-columns:auto 44px minmax(0,1fr) auto;gap:12px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line);cursor:pointer;text-transform:none;letter-spacing:0;font-size:14px;color:var(--fg)}
+.lbrow.on{background:color-mix(in srgb,var(--ok-bg) 55%,transparent)}
+.lbrow input{width:18px;height:18px}
+.lbqr{width:44px;height:44px;display:block}
+.lbqr .qr{width:44px;height:44px;display:block;border-radius:3px}
+.lbrow .lname{display:flex;flex-direction:column}
+.lbrow .sub{font-weight:400;color:var(--muted);font-size:12.5px}
+.lbcode{font-size:12px;color:var(--muted)}
+
+/* печать листа наклеек */
+#printSheet{display:none}
+@media print{
+  @page{size:A4;margin:0}
+  html,body{background:#fff!important;padding:0!important;margin:0!important}
+  body>*:not(#printSheet){display:none!important}
+  #printSheet{display:block!important;color:#000;font-family:Arial,Helvetica,sans-serif}
+  .lpage{width:210mm;height:297mm;display:grid;box-sizing:border-box;page-break-after:always;break-after:page;overflow:hidden}
+  .lpage:last-child{page-break-after:auto;break-after:auto}
+  .lpage.s24{grid-template-columns:repeat(3,70mm);grid-auto-rows:37.125mm}
+  .lpage.s40{grid-template-columns:repeat(4,48.5mm);grid-auto-rows:25.4mm;padding:21.5mm 8mm}
+  .lpage.s65{grid-template-columns:repeat(5,38mm);grid-auto-rows:21.2mm;padding:10.7mm 10mm}
+  .lbl{display:flex;align-items:center;gap:2mm;padding:2mm 2.5mm;overflow:hidden;box-sizing:border-box}
+  .lq{flex:none;height:100%;aspect-ratio:1}
+  .lq .qr{width:100%;height:100%;display:block}
+  .lt{display:flex;flex-direction:column;min-width:0;line-height:1.15}
+  .lt b{font-size:9pt;font-weight:700;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+  .lt span{font-size:7pt;color:#333;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .lt code{font-family:"Courier New",monospace;font-size:9pt;font-weight:700;margin-top:1mm;background:none;padding:0;color:#000}
+  .s40 .lt b{font-size:7.5pt;-webkit-line-clamp:2} .s40 .lt span{font-size:6pt}
+  .s65 .lbl{padding:1.2mm 1.5mm;gap:1.2mm} .s65 .lt b{font-size:6.5pt;-webkit-line-clamp:2} .s65 .lt span{display:none} .s65 .lt code{font-size:7pt;margin-top:.5mm}
+}
+
+/* =================== Сканер =================== */
+.prTools{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}
+.prTools .btn .ti{width:18px;height:18px}
+.prcode{display:flex;gap:6px;margin-left:auto}
+.prcode .field{width:170px;font-family:var(--f-mono)}
+@media (max-width:560px){.prcode{margin-left:0;width:100%}.prcode .field{flex:1;width:auto}}
+.scanbox{position:relative;margin-top:10px;border-radius:var(--r);overflow:hidden;background:#000;aspect-ratio:4/3;max-height:46vh;width:100%}
+.scanbox video{width:100%;height:100%;object-fit:cover;display:block}
+.scanframe{position:absolute;inset:18% 26%;border:3px solid rgba(255,255,255,.85);border-radius:14px;box-shadow:0 0 0 999px rgba(0,0,0,.25);pointer-events:none}
+@media (max-width:560px){.scanframe{inset:16% 14%}}
+.scanmsg{position:absolute;left:10px;right:10px;bottom:10px;background:rgba(0,0,0,.72);color:#fff;border-radius:8px;padding:8px 12px;font-size:14px;font-weight:600;text-align:center}
+.scanmsg.ok{background:rgba(31,122,69,.92)} .scanmsg.bad{background:rgba(176,38,43,.92)}
+.scanclose{position:absolute;top:10px;right:10px;background:rgba(0,0,0,.6);color:#fff;border-color:rgba(255,255,255,.4)}
+.pkrow.flash{animation:flash 1.2s ease-out}

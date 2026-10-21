@@ -54,7 +54,7 @@ if(window.SKLAD_LIB_FAILED || !window.supabase){
 }
 const sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_KEY, { auth:{ persistSession:true, autoRefreshToken:true, detectSessionInUrl:true } });
 
-let me = null, items = [], profiles = {}, logRows = [], events = [], lines = [], crew = [], schedules = [], periods = [], channel = null, started = false, recovering = false;
+let me = null, items = [], profiles = {}, logRows = [], events = [], lines = [], crew = [], schedules = [], periods = [], kits = [], kitItems = [], channel = null, started = false, recovering = false;
 
 opts($("fCat"), CATS, true); opts($("fState"), Object.keys(STATES), true); opts($("fStatus"), Object.keys(STATUSES), true);
 opts($("e_category"), CATS); opts($("e_state"), Object.keys(STATES)); opts($("e_status"), Object.keys(STATUSES)); opts($("e_unit"), UNITS);
@@ -133,7 +133,7 @@ async function startApp(){
   $("meName").onclick = () => openSchedule(me.id);
   $("addBtn").hidden = !can("manager");
 
-  const [it, pr, lg, ev, el, cr, ss, sp] = await Promise.all([
+  const [it, pr, lg, ev, el, cr, ss, sp, kt, ki] = await Promise.all([
     sb.from("items").select("*").order("id"),
     sb.from("profiles").select("*").order("created_at"),
     sb.from("item_log").select("*").order("created_at", { ascending:false }).limit(300),
@@ -141,7 +141,9 @@ async function startApp(){
     sb.from("event_items").select("*").order("id"),
     sb.from("event_crew").select("*").order("id"),
     sb.from("staff_schedule").select("*"),
-    sb.from("staff_periods").select("*").order("date_from")
+    sb.from("staff_periods").select("*").order("date_from"),
+    sb.from("kits").select("*").order("name"),
+    sb.from("kit_items").select("*").order("id")
   ]);
   if(it.error){ toast(errText(it.error)); }
   items = it.data || []; logRows = lg.data || [];
@@ -149,10 +151,19 @@ async function startApp(){
   if(ev.error || el.error){ EV.missing = true; } else { events = ev.data || []; lines = el.data || []; }
   if(cr.error){ EV.crewMissing = true; } else crew = cr.data || [];
   if(ss.error || sp.error){ EV.schedMissing = true; } else { schedules = ss.data || []; periods = sp.data || []; }
+  if(kt.error || ki.error){ KIT.missing = true; } else { kits = kt.data || []; kitItems = ki.data || []; }
   renderStock(); renderLog(); renderUsers(); renderEvents();
   subscribe();
-  const h = location.hash.slice(1);
-  if(/^ev-\d+$/.test(h)) openEvent(+h.slice(3)); else if(["stock","events","log","users"].includes(h)) setTab(h);
+  renderToday(); renderKits();
+  route(location.hash.slice(1) || "today");
+}
+// Переход по адресу: #today, #stock, #ev-12, #i-5 (позиция), #k-3 (комплект)…
+function route(h){
+  if(/^ev-\d+$/.test(h)) return openEvent(+h.slice(3));
+  if(/^i-\d+$/.test(h)){ const it = items.find(x => x.id === +h.slice(2)); setStockView("items"); setTab("stock"); if(it) openEditor(it); else toast("Позиция не найдена — возможно, её удалили"); return; }
+  if(/^k-\d+$/.test(h)){ setStockView("kits"); setTab("stock"); KIT.focus = +h.slice(2); renderKits(); return; }
+  if(["today","stock","events","log","users"].includes(h)){ if(h === "events") EV.open = null; setTab(h); renderEvents(); return; }
+  setTab("today");
 }
 
 function upsertRow(arr, p){
@@ -177,6 +188,12 @@ function subscribe(){
     })
     .on("postgres_changes", { event:"*", schema:"public", table:"event_items" }, p => {
       lines = upsertRow(lines, p); renderEvents(); renderStock();
+    })
+    .on("postgres_changes", { event:"*", schema:"public", table:"kits" }, p => {
+      kits = upsertRow(kits, p); renderKits(); renderEvents();
+    })
+    .on("postgres_changes", { event:"*", schema:"public", table:"kit_items" }, p => {
+      kitItems = upsertRow(kitItems, p); renderKits(); renderEvents();
     })
     .on("postgres_changes", { event:"*", schema:"public", table:"staff_schedule" }, p => {
       if(p.eventType === "DELETE") schedules = schedules.filter(x => x.user_id !== p.old.user_id);
@@ -208,15 +225,15 @@ function subscribe(){
 function setTab(t){
   if(t === "users" && !can("manager")) t = "stock";
   document.querySelectorAll("#mainTabs .tab").forEach(b => b.classList.toggle("active", b.dataset.tab === t));
-  ["stock","events","log","users"].forEach(x => $("tab-" + x).hidden = x !== t);
+  ["today","stock","events","log","users"].forEach(x => $("tab-" + x).hidden = x !== t);
+  if(t === "today") renderToday();
   if(t === "events" && EV.open){ history.replaceState(null, "", "#ev-" + EV.open); }
   else history.replaceState(null, "", "#" + t);
 }
 window.addEventListener("hashchange", () => {
   if(!me) return;
   const h = location.hash.slice(1);
-  if(/^ev-\d+$/.test(h)) openEvent(+h.slice(3));
-  else if(["stock","events","log","users"].includes(h)){ if(h === "events") EV.open = null; setTab(h); renderEvents(); }
+  route(h);
 });
 document.querySelectorAll("#mainTabs .tab").forEach(b => b.onclick = () => {
   if(b.dataset.tab === "events" && b.classList.contains("active") && EV.open){ closeEvent(); return; }
@@ -226,6 +243,7 @@ document.querySelectorAll("#mainTabs .tab").forEach(b => b.onclick = () => {
 // ---------- склад ----------
 function placesOf(){ return [...new Set(items.map(i => i.place || "Без места"))].sort((a,b) => a.localeCompare(b,"ru")); }
 function renderStock(){
+  if(me) scheduleToday();
   const pl = placesOf(), cur = $("fPlace").value;
   opts($("fPlace"), pl, true); $("fPlace").value = pl.includes(cur) ? cur : "";
   $("placesList").innerHTML = pl.map(p => `<option value="${esc(p)}">`).join("");
@@ -302,6 +320,12 @@ $("list").addEventListener("change", e => {
   if(act === "status"){ el.className = "chip " + (STATUSES[el.value] || "c-off"); updateItem(id, { status: el.value }); }
 });
 ["q","fPlace","fCat","fState","fStatus","fIssues"].forEach(id => $(id).addEventListener("input", renderStock));
+function updFilterCount(){
+  const n = ["fPlace","fCat","fState","fStatus"].filter(id => $(id).value).length + ($("fIssues").checked ? 1 : 0);
+  $("fCount").textContent = n; $("fCount").hidden = !n;
+}
+["fPlace","fCat","fState","fStatus","fIssues"].forEach(id => $(id).addEventListener("input", updFilterCount));
+$("fToggle").onclick = () => { const f = $("fToggle").parentElement, on = !f.classList.contains("open"); f.classList.toggle("open", on); $("fToggle").setAttribute("aria-expanded", on); };
 
 // ---------- карточка ----------
 let editing = null;
@@ -325,7 +349,7 @@ $("scrim").addEventListener("mousedown", e => { if(e.target === $("scrim")) clos
 document.addEventListener("keydown", e => {
   if(e.key !== "Escape") return;
   if(!$("scrim").hidden) closeEditor();
-  ["evScrim","pkScrim","prScrim","crScrim","scScrim"].forEach(id => $(id).hidden = true);
+  ["evScrim","pkScrim","prScrim","crScrim","scScrim","kitScrim","ekScrim"].forEach(id => $(id).hidden = true);
 });
 $("form").addEventListener("submit", async e => {
   e.preventDefault();
@@ -359,6 +383,7 @@ function renderLog(){
   const ACT = { insert:"добавил(а)", update:"изменил(а)", delete:"удалил(а)" };
   $("logList").innerHTML = rows.map(r => {
     if(r.kind === "event" || r.kind === "event_line" || r.kind === "event_crew") return logEventHtml(r, name);
+    if(r.kind === "kit"){ const t = new Date(r.created_at); return `<div class="ev"><time datetime="${esc(r.created_at)}">${t.toLocaleDateString("ru-RU", { day:"2-digit", month:"2-digit" })} ${t.toLocaleTimeString("ru-RU", { hour:"2-digit", minute:"2-digit" })}</time><div class="what"><span class="who">${esc(name(r.user_id))}</span> <span class="act ${r.action}">${{ insert:"создал(а) комплект", update:"изменил(а) комплект", delete:"удалил(а) комплект" }[r.action]}</span> ${esc(r.item_name || "")}</div></div>`; }
     const ch = r.changes ? Object.entries(r.changes).filter(([k]) => FIELDS[k]).map(([k,[a,b]]) => `<li>${FIELDS[k]}: ${esc(fmt(a))} → <b>${esc(fmt(b))}</b></li>`).join("") : "";
     const t = new Date(r.created_at);
     return `<div class="ev"><time datetime="${esc(r.created_at)}" title="${t.toLocaleString("ru-RU")}">${t.toLocaleDateString("ru-RU",{day:"2-digit",month:"2-digit"})} ${t.toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"})}</time>
@@ -490,6 +515,7 @@ try { EV.mine = localStorage.getItem("sklad.evMine") === "1"; } catch(_) {}
 // ---------- обзор ----------
 function renderEvents(){
   if(!me) return;
+  scheduleToday();
   const outN = events.filter(e => e.status === "out").length;
   $("outCount").textContent = outN; $("outCount").hidden = !outN;
   $("outCount").title = "На выезде: " + outN;
@@ -526,6 +552,7 @@ function renderCal(){
     if(k === t) cls.push("today");
     if(k === EV.sel) cls.push("sel");
     if(i % 7 > 4) cls.push("we");
+    if(evs.length) cls.push("has");
     const chips = evs.slice(0, 3).map(e => {
       const warn = conflictsOf(e).length || shortagesOf(e).length;
       const label = (e.date_from === k || i % 7 === 0) ? esc(e.title) : "";
@@ -541,8 +568,15 @@ function renderCal(){
 function renderDayPanel(){
   const k = EV.sel;
   const evs = events.filter(e => e.date_from <= k && e.date_to >= k && evVisible(e)).sort((a, b) => a.date_from.localeCompare(b.date_from));
-  $("dayPanel").innerHTML = `<div class="dp-head"><h3>${fmtD(k, { weekday:"long", day:"numeric", month:"long" })}</h3>${can("manager") ? `<button class="btn" type="button" data-newev="${k}">+ Мероприятие на этот день</button>` : ""}</div>`
-    + (evs.length ? `<div class="evcards">${evs.map(evCard).join("")}</div>` : `<p class="hint">В этот день мероприятий нет${can("manager") ? " — можно создать новое" : ""}.</p>`);
+  const t = todayKey();
+  let html = mineNote() + `<div class="dp-head"><h3>${fmtD(k, { weekday:"long", day:"numeric", month:"long" })}</h3>${can("manager") ? `<button class="btn" type="button" data-newev="${k}">+ Мероприятие на этот день</button>` : ""}</div>`;
+  if(evs.length) html += `<div class="evcards">${evs.map(evCard).join("")}</div>`;
+  else {
+    html += `<p class="hint">В этот день мероприятий нет${can("manager") ? " — можно создать новое" : ""}.</p>`;
+    const next = events.filter(e => evVisible(e) && (e.status === "out" || (e.status === "planned" && e.date_to >= t))).sort((a, b) => a.date_from.localeCompare(b.date_from)).slice(0, 5);
+    if(next.length) html += `<h3 class="sect" style="margin:6px 0 0">Ближайшие</h3><div class="evcards">${next.map(evCard).join("")}</div>`;
+  }
+  $("dayPanel").innerHTML = html;
 }
 
 function evCard(e){
@@ -563,12 +597,18 @@ function evCard(e){
   </button>`;
 }
 
+// подсказка, если фильтр «только мои» что-то скрывает
+function mineNote(){
+  if(!EV.mine) return "";
+  const hidden = events.filter(e => e.status !== "cancelled" && !isMine(e) && (e.status === "out" || e.date_to >= todayKey())).length;
+  return hidden ? `<div class="banner warn mine">Включён фильтр «только мои» — скрыто мероприятий: ${hidden}. <button type="button" class="link" data-showall>Показать все</button></div>` : "";
+}
 function renderEvList(){
   const t = todayKey(), evs = events.filter(evVisible);
   const overdue = evs.filter(e => e.status === "planned" && e.date_to < t).sort((a, b) => a.date_from.localeCompare(b.date_from));
   const up = evs.filter(e => e.status === "out" || (e.status === "planned" && e.date_to >= t)).sort((a, b) => a.date_from.localeCompare(b.date_from));
   const past = evs.filter(e => e.status === "returned" || e.status === "cancelled").sort((a, b) => b.date_from.localeCompare(a.date_from)).slice(0, 40);
-  let h = "";
+  let h = mineNote();
   if(overdue.length) h += `<h3 class="sect bad">Дата прошла, но не отгружено</h3><p class="hint">Отметьте отгрузку и возврат или отмените — иначе оборудование числится забронированным.</p><div class="evcards">${overdue.map(evCard).join("")}</div>`;
   h += `<h3 class="sect">Ближайшие и на выезде</h3>` + (up.length ? `<div class="evcards">${up.map(evCard).join("")}</div>` : `<div class="empty"><strong>Впереди мероприятий нет</strong>${can("manager") ? "Нажмите «+ Мероприятие», чтобы забронировать оборудование." : "Менеджер ещё не запланировал мероприятия."}</div>`);
   if(past.length) h += `<h3 class="sect">Завершённые и отменённые</h3><div class="evcards">${past.map(evCard).join("")}</div>`;
@@ -582,6 +622,7 @@ $("mToday").onclick = () => { const n = new Date(); EV.month = new Date(n.getFul
 $("evAddBtn").onclick = () => openEvForm(null, EV.view === "cal" ? EV.sel : todayKey());
 $("evBrowse").addEventListener("click", e => {
   const nb = e.target.closest("[data-newev]"); if(nb){ openEvForm(null, nb.dataset.newev); return; }
+  if(e.target.closest("[data-showall]")){ EV.mine = false; try { localStorage.setItem("sklad.evMine", "0"); } catch(_) {} renderEvents(); return; }
   const ev = e.target.closest("[data-ev]"); if(ev){ openEvent(+ev.dataset.ev); return; }
   const day = e.target.closest("[data-day]");
   if(day){ EV.sel = day.dataset.day; const d = dparse(EV.sel); if(d.getMonth() !== EV.month.getMonth()) EV.month = new Date(d.getFullYear(), d.getMonth(), 1); renderCal(); }
@@ -602,6 +643,7 @@ function renderEventDetail(e){
   if(e.status === "planned" && W) acts.push(btn("load", "Отгрузить", "primary", !ls.length));
   if(e.status === "out" && W) acts.push(btn("return", "Принять возврат", "primary"));
   if(M && (e.status === "planned" || e.status === "out")) acts.push(btn("pick", "+ Оборудование"));
+  if(M && (e.status === "planned" || e.status === "out") && kits.length) acts.push(btn("kit", "+ Комплект"));
   if(M) acts.push(btn("edit", "Изменить"));
   if(ls.length) acts.push(btn("copy", "Копировать список", "ghost"));
   acts.push(`<span class="sp"></span>`);
@@ -655,6 +697,7 @@ function renderEventDetail(e){
           ${e.client ? `<span><small>Заказчик</small>${esc(e.client)}</span>` : ""}
           ${resp ? `<span><small>Ответственный</small>${esc(resp)}</span>` : ""}
           <span><small>Оборудование</small>${ls.length} поз. · ${units} ед.</span>
+          ${kitsInEvent(e).length ? `<span><small>Комплекты</small>${kitsInEvent(e).map(k => esc(k.name)).join(", ")}</span>` : ""}
         </div>
         ${e.note ? `<p class="evnote">${esc(e.note)}</p>` : ""}
       </div>
@@ -717,6 +760,7 @@ $("evDetail").addEventListener("click", async ev => {
   if(a === "edit") openEvForm(e);
   if(a === "pick") openPicker(e);
   if(a === "crew") openCrew(e);
+  if(a === "kit") openEvKits(e);
   if(a === "load") openProcess(e, "load");
   if(a === "return") openProcess(e, "return");
   if(a === "copy") copyEventList(e);
@@ -873,7 +917,7 @@ function openProcess(e, mode){
   $("prSave").textContent = mode === "load" ? "Отгрузить" : "Принять возврат";
   $("prErr").hidden = true; renderProcess(); $("prScrim").hidden = false;
 }
-function renderProcess(){
+function renderProcess(hl){
   const e = PR.ev;
   const ls = linesOf(e.id).map(l => ({ l, it:itemById(l.item_id) })).filter(x => x.it)
     .sort((a, b) => (a.it.place || "").localeCompare(b.it.place || "", "ru") || a.it.name.localeCompare(b.it.name, "ru", { numeric:true }));
@@ -882,13 +926,14 @@ function renderProcess(){
     const target = PR.mode === "load" ? +l.qty : (l.qty_out != null ? +l.qty_out : +l.qty);
     const v = PR.vals.get(l.id), less = v < target; if(less) diffN++;
     const head = it.place !== lastPlace ? `<div class="pkcat">${esc(it.place || "Без места")}</div>` : ""; lastPlace = it.place;
-    return head + `<div class="pkrow${less ? " bad" : " on"}" data-pr="${l.id}">
-      <div class="lname">${esc(it.name)}${it.maker ? ` <span class="maker">${esc(it.maker)}</span>` : ""}</div>
+    return head + `<div class="pkrow${less ? " bad" : " on"}${l.id === hl ? " flash" : ""}" data-pr="${l.id}">
+      <div class="lname">${esc(it.name)}${it.maker ? ` <span class="maker">${esc(it.maker)}</span>` : ""}<div class="sub mono">${itemCode(it.id)}</div></div>
       <div class="pkfree">${PR.mode === "load" ? "нужно" : "уехало"} <b>${target}</b> ${esc(it.unit || "шт.")}${less ? `<span class="neg">${PR.mode === "load" ? "погружено меньше" : "не вернулось " + (target - v)}</span>` : ""}</div>
       <span class="qtyBox sm"><button type="button" data-pa="dec" aria-label="Меньше">−</button><input type="number" min="0" inputmode="numeric" value="${v}" data-pa="qty" aria-label="${PR.mode === "load" ? "Погружено" : "Вернулось"}"><button type="button" data-pa="inc" aria-label="Больше">+</button></span>
     </div>`;
   }).join("");
   $("prSum").textContent = diffN ? `С расхождением: ${diffN} поз.` : "Всё полностью";
+  if(hl){ const r = $("prList").querySelector(`[data-pr="${hl}"]`); if(r) r.scrollIntoView({ block:"nearest" }); }
 }
 $("prAll").onclick = () => { linesOf(PR.ev.id).forEach(l => PR.vals.set(l.id, PR.mode === "load" ? +l.qty : (l.qty_out != null ? +l.qty_out : +l.qty))); renderProcess(); };
 $("prList").addEventListener("click", ev => {
@@ -909,7 +954,7 @@ $("prSave").onclick = async () => {
   const ok = await setEvStatus(e, PR.mode === "load" ? "out" : "returned");
   $("prSave").disabled = false;
   if(!ok) return;
-  $("prScrim").hidden = true;
+  $("prScrim").hidden = true; stopScan();
   if(PR.mode === "load") toast("Отгружено — мероприятие на выезде");
   else { const s = shortagesOf(e); toast(s.length ? `Возврат принят. Не вернулось: ${s.reduce((a, x) => a + x.miss, 0)} ед.` : "Возврат принят — всё на месте"); }
 };
@@ -953,7 +998,7 @@ $("crForm").addEventListener("submit", async ev => {
 $("evMine").addEventListener("change", () => { EV.mine = $("evMine").checked; try { localStorage.setItem("sklad.evMine", EV.mine ? "1" : "0"); } catch(_) {} renderEvents(); });
 
 document.querySelectorAll("[data-close]").forEach(b => b.onclick = () => $(b.dataset.close).hidden = true);
-["evScrim","pkScrim","prScrim","crScrim"].forEach(id => $(id).addEventListener("mousedown", e => { if(e.target === $(id)) $(id).hidden = true; }));
+["evScrim","pkScrim","prScrim","crScrim","kitScrim","ekScrim"].forEach(id => $(id).addEventListener("mousedown", e => { if(e.target === $(id)) $(id).hidden = true; }));
 
 // =====================================================================
 // ---------- графики сотрудников ----------
@@ -1141,6 +1186,374 @@ function phoneMask(inp){
   inp.addEventListener("blur", () => { if(!phoneCore(inp.value)) inp.value = ""; });
 }
 phoneMask($("c_phone"));
+
+// =====================================================================
+// ---------- комплекты (кейсы) ----------
+// =====================================================================
+const KIT = { missing:false, focus:null, edit:null, sel:new Map(), orig:new Map() };
+const kitById = id => kits.find(k => k.id === id);
+const kitLines = kitId => kitItems.filter(x => x.kit_id === kitId);
+const byName = (a, b) => (a.name || "").localeCompare(b.name || "", "ru", { numeric:true });
+// Сколько таких комплектов можно собрать на эти даты с учётом других броней.
+function kitFree(kitId, from, to, exceptId){
+  const ls = kitLines(kitId); if(!ls.length) return 0;
+  return Math.min(...ls.map(x => { const it = itemById(x.item_id); return it ? Math.floor(Math.max(0, freeQty(it, from, to, exceptId)) / +x.qty) : 0; }));
+}
+// Комплекты, которые целиком входят в список мероприятия.
+function kitsInEvent(e){
+  const ls = linesOf(e.id);
+  return kits.filter(k => { const kl = kitLines(k.id); return kl.length && kl.every(x => { const l = ls.find(y => y.item_id === x.item_id); return l && +l.qty >= +x.qty; }); });
+}
+
+let SVIEW = "items";
+function setStockView(v){
+  SVIEW = v;
+  document.querySelectorAll("[data-sview]").forEach(b => b.classList.toggle("active", b.dataset.sview === v));
+  $("stockMain").hidden = v !== "items"; $("kitsView").hidden = v !== "kits"; $("labelsView").hidden = v !== "labels";
+  if(v === "kits") renderKits();
+  if(v === "labels") renderLabels();
+}
+document.querySelectorAll("[data-sview]").forEach(b => b.onclick = () => setStockView(b.dataset.sview));
+
+function renderKits(){
+  if(!me || $("kitsView").hidden && !KIT.focus) return;
+  const M = can("manager");
+  if(KIT.missing){ $("kitsView").innerHTML = `<div class="empty"><strong>Комплекты ещё не подключены</strong>Администратору нужно один раз выполнить <code>supabase/05_kits.sql</code> в Supabase → SQL Editor.</div>`; return; }
+  const head = `<div class="filters kithead"><p class="hint">Комплект — кейс или набор с постоянным содержимым. В мероприятие добавляется одной кнопкой, при отгрузке сканируется одной наклейкой.</p><span class="sp"></span>${M ? `<button type="button" class="btn primary" data-kitnew>+ Комплект</button>` : ""}</div>`;
+  if(!kits.length){ $("kitsView").innerHTML = head + `<div class="empty"><strong>Комплектов пока нет</strong>${M ? "Создайте первый — например, «Кейс коммутации»: его состав можно взять из места хранения одной кнопкой." : "Менеджер ещё не собрал комплекты."}</div>`; return; }
+  $("kitsView").innerHTML = head + `<div class="kitgrid">` + [...kits].sort(byName).map(k => {
+    const ls = kitLines(k.id).map(x => ({ x, it:itemById(x.item_id) })).filter(o => o.it).sort((a, b) => byName(a.it, b.it));
+    const out = events.filter(e => e.status === "out" && kitsInEvent(e).some(z => z.id === k.id));
+    const short = ls.filter(o => (num(o.it.qty_fact) || 0) < +o.x.qty);
+    return `<section class="group kit${KIT.focus === k.id ? " focus" : ""}" id="kit-${k.id}">
+      <div class="ghead"><h2>${esc(k.name)}</h2><small>${ls.length} поз. · ${ls.reduce((a, o) => a + +o.x.qty, 0)} ед.</small>
+        ${M ? `<span class="kitbtns"><button type="button" class="btn sm" data-kitedit="${k.id}">Изменить</button><button type="button" class="btn sm danger" data-kitdel="${k.id}">Удалить</button></span>` : ""}</div>
+      <div class="kitmeta"><span class="mono">K-${k.id}</span>${k.place ? `<span>${esc(k.place)}</span>` : ""}${k.note ? `<span class="muted">${esc(k.note)}</span>` : ""}
+        ${out.length ? `<span class="chip c-warn xs">на выезде: ${out.map(e => esc(e.title)).join(", ")}</span>` : ""}
+        ${short.length ? `<span class="chip c-bad xs">на складе меньше, чем в составе: ${short.length} поз.</span>` : ""}</div>
+      <div class="kitlist">${ls.map(o => `<div class="kitrow"><span>${esc(o.it.name)}${o.it.maker ? ` <span class="maker">${esc(o.it.maker)}</span>` : ""}</span><b class="mono">× ${+o.x.qty}</b></div>`).join("") || `<p class="hint">Состав пуст — нажмите «Изменить».</p>`}</div>
+    </section>`;
+  }).join("") + `</div>`;
+  if(KIT.focus){ const el = $("kit-" + KIT.focus); if(el) el.scrollIntoView({ block:"center" }); KIT.focus = null; }
+}
+$("kitsView").addEventListener("click", async e => {
+  if(e.target.closest("[data-kitnew]")) return openKit(null);
+  const ed = e.target.closest("[data-kitedit]"); if(ed) return openKit(kitById(+ed.dataset.kitedit));
+  const del = e.target.closest("[data-kitdel]");
+  if(del){
+    if(!del.classList.contains("armed")){ del.classList.add("armed"); del.textContent = "Точно удалить?"; return; }
+    const { error } = await sb.from("kits").delete().eq("id", +del.dataset.kitdel);
+    if(error){ toast(errText(error)); return; }
+    const id = +del.dataset.kitdel; kits = kits.filter(k => k.id !== id); kitItems = kitItems.filter(x => x.kit_id !== id);
+    toast("Комплект удалён (оборудование на складе не тронуто)"); renderKits();
+  }
+});
+
+function openKit(k){
+  KIT.edit = k || null; KIT.sel = new Map(); KIT.orig = new Map();
+  if(k) kitLines(k.id).forEach(x => { KIT.sel.set(x.item_id, +x.qty); KIT.orig.set(x.item_id, x); });
+  $("kitTitle").textContent = k ? "Комплект: " + k.name : "Новый комплект";
+  $("k_name").value = k ? k.name : ""; $("k_place").value = k ? k.place || "" : ""; $("k_note").value = k ? k.note || "" : "";
+  opts($("kFromPlace"), placesOf(), true); $("kFromPlace").options[0].textContent = "Взять всё из места…"; $("kFromPlace").value = "";
+  $("kQ").value = ""; $("kOnly").checked = !!k; $("kitErr").hidden = true;
+  renderKitPick(); $("kitScrim").hidden = false; setTimeout(() => $("k_name").focus(), 30);
+}
+function renderKitPick(){
+  const q = $("kQ").value.trim().toLowerCase(), only = $("kOnly").checked;
+  const list = items.filter(i => i.state !== "Списано" && (!only || KIT.sel.get(i.id) > 0) && (!q || [i.name, i.maker, i.model, i.place].join(" ").toLowerCase().includes(q)))
+    .sort((a, b) => (a.place || "").localeCompare(b.place || "", "ru") || byName(a, b));
+  let last = null;
+  $("kList").innerHTML = list.length ? list.map(i => {
+    const v = KIT.sel.get(i.id) || 0, head = i.place !== last ? `<div class="pkcat">${esc(i.place || "Без места")}</div>` : ""; last = i.place;
+    return head + `<div class="pkrow${v ? " on" : ""}" data-ki="${i.id}">
+      <div class="lname">${esc(i.name)}${i.maker ? ` <span class="maker">${esc(i.maker)}</span>` : ""}<div class="sub">${esc(i.category || "")}</div></div>
+      <div class="pkfree">на складе <b>${num(i.qty_fact) || 0}</b></div>
+      <span class="qtyBox sm"><button type="button" data-ka="dec" aria-label="Меньше">−</button><input type="number" min="0" inputmode="numeric" value="${v || ""}" placeholder="0" data-ka="qty" aria-label="В комплекте"><button type="button" data-ka="inc" aria-label="Больше">+</button></span>
+    </div>`;
+  }).join("") : `<div class="empty" style="border:0">${only ? "Пока ничего не выбрано — снимите «только выбранное» или возьмите всё из места хранения." : "Ничего не найдено."}</div>`;
+  let n = 0, u = 0; KIT.sel.forEach(v => { if(v > 0){ n++; u += v; } });
+  $("kSum").textContent = `В комплекте: ${n} поз. · ${u} ед.`;
+}
+["kQ","kOnly"].forEach(id => $(id).addEventListener("input", renderKitPick));
+$("kFromPlace").addEventListener("change", () => {
+  const p = $("kFromPlace").value; if(!p) return;
+  items.filter(i => (i.place || "Без места") === p && i.state !== "Списано").forEach(i => KIT.sel.set(i.id, Math.max(1, num(i.qty_fact) || 1)));
+  if(!$("k_place").value) $("k_place").value = p;
+  if(!$("k_name").value) $("k_name").value = p;
+  $("kFromPlace").value = ""; $("kOnly").checked = true; renderKitPick();
+  toast("Добавлено всё из «" + p + "» — поправьте количество, если в кейсе лежит не всё");
+});
+$("kList").addEventListener("click", e => {
+  const b = e.target.closest("button[data-ka]"); if(!b) return;
+  const id = +b.closest("[data-ki]").dataset.ki; KIT.sel.set(id, Math.max(0, (KIT.sel.get(id) || 0) + (b.dataset.ka === "inc" ? 1 : -1))); renderKitPick();
+});
+$("kList").addEventListener("change", e => {
+  if(e.target.dataset.ka !== "qty") return;
+  KIT.sel.set(+e.target.closest("[data-ki]").dataset.ki, Math.max(0, Math.round(num(e.target.value) || 0))); renderKitPick();
+});
+$("kitForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const err = t => { $("kitErr").textContent = t; $("kitErr").hidden = false; };
+  const d = { name:$("k_name").value.trim(), place:$("k_place").value.trim() || null, note:$("k_note").value.trim() || null };
+  if(!d.name) return err("Укажите название комплекта.");
+  let n = 0; KIT.sel.forEach(v => { if(v > 0) n++; });
+  if(!n) return err("Добавьте в комплект хотя бы одну позицию.");
+  $("kitSave").disabled = true;
+  try {
+    let kit = KIT.edit;
+    if(kit){ const r = await sb.from("kits").update(d).eq("id", kit.id); if(r.error) throw r.error; Object.assign(kit, d); }
+    else { const r = await sb.from("kits").insert(d).select().single(); if(r.error) throw r.error; kit = r.data; if(!kitById(kit.id)) kits.push(kit); }
+    const ins = [], upd = [], del = [];
+    KIT.sel.forEach((v, itemId) => { const o = KIT.orig.get(itemId);
+      if(v > 0 && !o) ins.push({ kit_id:kit.id, item_id:itemId, qty:v });
+      else if(v > 0 && o && +o.qty !== v) upd.push([o.id, v]);
+      else if(v <= 0 && o) del.push(o.id); });
+    if(ins.length){ const r = await sb.from("kit_items").insert(ins).select(); if(r.error) throw r.error; (r.data || []).forEach(x => { if(!kitItems.find(y => y.id === x.id)) kitItems.push(x); }); }
+    for(const [id, v] of upd){ const r = await sb.from("kit_items").update({ qty:v }).eq("id", id); if(r.error) throw r.error; const x = kitItems.find(y => y.id === id); if(x) x.qty = v; }
+    if(del.length){ const r = await sb.from("kit_items").delete().in("id", del); if(r.error) throw r.error; kitItems = kitItems.filter(x => !del.includes(x.id)); }
+    $("kitScrim").hidden = true; toast(KIT.edit ? "Комплект сохранён" : "Комплект создан"); renderKits(); renderEvents();
+  } catch(ex){ err(errText(ex)); }
+  finally { $("kitSave").disabled = false; }
+});
+
+// ---------- комплект в мероприятие ----------
+const EK = { ev:null };
+function openEvKits(e){ EK.ev = e; $("ekErr").hidden = true; renderEvKits(); $("ekScrim").hidden = false; }
+function renderEvKits(){
+  const e = EK.ev, inEv = kitsInEvent(e).map(k => k.id);
+  $("ekHint").textContent = `«${e.title}», ${fmtRange(e)}. Состав комплекта добавится в список оборудования.`;
+  $("ekList").innerHTML = kits.length ? [...kits].sort(byName).map(k => {
+    const free = kitFree(k.id, e.date_from, e.date_to, e.id), ls = kitLines(k.id);
+    return `<div class="pkrow${inEv.includes(k.id) ? " on" : ""}">
+      <div class="lname">${esc(k.name)}<div class="sub">${ls.length} поз. · ${ls.reduce((a, x) => a + +x.qty, 0)} ед.${k.place ? " · " + esc(k.place) : ""}</div></div>
+      <div class="pkfree ${free <= 0 ? "neg" : ""}">${inEv.includes(k.id) ? "уже в списке" : free > 0 ? `можно взять: <b>${free}</b>` : "не хватает на эти даты"}</div>
+      <button type="button" class="btn sm" data-ekadd="${k.id}"${ls.length ? "" : " disabled"}>+ Добавить</button>
+    </div>`;
+  }).join("") : `<div class="empty" style="border:0">Комплектов пока нет. Создайте их в «Склад → Комплекты».</div>`;
+}
+$("ekList").addEventListener("click", async ev => {
+  const b = ev.target.closest("[data-ekadd]"); if(!b) return;
+  const e = EK.ev, k = kitById(+b.dataset.ekadd), cur = linesOf(e.id);
+  const ins = [], upd = [];
+  kitLines(k.id).forEach(x => { const l = cur.find(y => y.item_id === x.item_id); if(l) upd.push([l, +l.qty + +x.qty]); else ins.push({ event_id:e.id, item_id:x.item_id, qty:+x.qty }); });
+  b.disabled = true;
+  try {
+    if(ins.length){ const r = await sb.from("event_items").insert(ins).select(); if(r.error) throw r.error; (r.data || []).forEach(x => { if(!lines.find(y => y.id === x.id)) lines.push(x); }); }
+    for(const [l, v] of upd){ const r = await sb.from("event_items").update({ qty:v }).eq("id", l.id); if(r.error) throw r.error; l.qty = v; }
+    toast(`Комплект «${k.name}» добавлен: ${ins.length + upd.length} поз.`); renderEvents(); renderStock(); renderEvKits();
+  } catch(ex){ $("ekErr").textContent = errText(ex); $("ekErr").hidden = false; b.disabled = false; }
+});
+
+// =====================================================================
+// ---------- QR-коды и этикетки ----------
+// =====================================================================
+const siteBase = () => location.origin + location.pathname;
+const itemCode = id => "I-" + id, kitCode = id => "K-" + id;
+function qrSvg(text){
+  if(!window.SkladQR) return "";
+  const q = new SkladQR(-1, SkladQR.L.M); q.addData(text); q.make();
+  const n = q.getModuleCount(); let d = "";
+  for(let r = 0; r < n; r++){ let c = 0; while(c < n){ if(q.isDark(r, c)){ let s = c; while(c < n && q.isDark(r, c)) c++; d += `M${s} ${r}h${c - s}v1h-${c - s}z`; } else c++; } }
+  return `<svg class="qr" viewBox="-2 -2 ${n + 4} ${n + 4}" shape-rendering="crispEdges" aria-hidden="true"><rect x="-2" y="-2" width="${n + 4}" height="${n + 4}" fill="#fff"/><path d="${d}" fill="#000"/></svg>`;
+}
+const LB = { what:"items", sel:new Set(), selK:new Set() };
+document.querySelectorAll("[data-lbwhat]").forEach(b => b.onclick = () => { LB.what = b.dataset.lbwhat; renderLabels(); });
+function lbList(){
+  const q = $("lbQ").value.trim().toLowerCase(), p = $("lbPlace").value;
+  if(LB.what === "kits") return [...kits].filter(k => (!p || (k.place || "") === p) && (!q || [k.name, k.place].join(" ").toLowerCase().includes(q))).sort(byName);
+  return items.filter(i => i.state !== "Списано" && (!p || (i.place || "Без места") === p) && (!q || [i.name, i.maker, i.model, i.inv, i.place].join(" ").toLowerCase().includes(q)))
+    .sort((a, b) => (a.place || "").localeCompare(b.place || "", "ru") || byName(a, b));
+}
+function lbLabels(){
+  const out = [], copies = $("lbCopies").value;
+  if(LB.what === "kits") kits.filter(k => LB.selK.has(k.id)).sort(byName).forEach(k => out.push({ code:kitCode(k.id), url:siteBase() + "#k-" + k.id, name:k.name, sub:"Комплект" + (k.place ? " · " + k.place : "") }));
+  else items.filter(i => LB.sel.has(i.id)).sort((a, b) => (a.place || "").localeCompare(b.place || "", "ru") || byName(a, b)).forEach(i => {
+    const n = copies === "qty" ? Math.max(1, Math.min(200, num(i.qty_fact) || 1)) : 1;
+    for(let c = 0; c < n; c++) out.push({ code:itemCode(i.id), url:siteBase() + "#i-" + i.id, name:i.name + (i.maker ? " " + i.maker : ""), sub:i.inv || i.place || "" });
+  });
+  return out;
+}
+function renderLabels(){
+  if(!me || $("labelsView").hidden) return;
+  document.querySelectorAll("[data-lbwhat]").forEach(b => b.classList.toggle("active", b.dataset.lbwhat === LB.what));
+  const pl = LB.what === "kits" ? [...new Set(kits.map(k => k.place).filter(Boolean))].sort((a, b) => a.localeCompare(b, "ru")) : placesOf();
+  const cur = $("lbPlace").value; opts($("lbPlace"), pl, true); $("lbPlace").value = pl.includes(cur) ? cur : "";
+  $("lbCopies").hidden = LB.what === "kits";
+  const list = lbList(), set = LB.what === "kits" ? LB.selK : LB.sel;
+  if(LB.what === "kits" && KIT.missing){ $("lbPick").innerHTML = `<div class="empty">Комплекты ещё не подключены (нужен <code>05_kits.sql</code>).</div>`; return; }
+  $("lbPick").innerHTML = list.length ? list.map(x => `<label class="lbrow${set.has(x.id) ? " on" : ""}">
+      <input type="checkbox" data-lb="${x.id}"${set.has(x.id) ? " checked" : ""}>
+      <span class="lbqr">${set.has(x.id) ? qrSvg(siteBase() + (LB.what === "kits" ? "#k-" : "#i-") + x.id) : ""}</span>
+      <span class="lname">${esc(x.name)}${x.maker ? ` <span class="maker">${esc(x.maker)}</span>` : ""}<span class="sub">${esc(LB.what === "kits" ? (x.place || "Комплект") : (x.place || ""))}${LB.what === "items" ? ` · ${num(x.qty_fact) || 0} ${esc(x.unit || "шт.")}` : ""}</span></span>
+      <span class="mono lbcode">${LB.what === "kits" ? kitCode(x.id) : itemCode(x.id)}</span>
+    </label>`).join("") : `<div class="empty" style="border:0">${LB.what === "kits" ? "Комплектов нет." : "Ничего не найдено."}</div>`;
+  $("lbAll").checked = list.length > 0 && list.every(x => set.has(x.id));
+  const labels = lbLabels(), per = +$("lbSize").value;
+  $("lbSum").textContent = labels.length ? `Наклеек: ${labels.length} · листов А4: ${Math.ceil(labels.length / per)}` : "Отметьте, что печатать";
+  $("lbPrint").disabled = !labels.length;
+}
+["lbQ","lbPlace","lbSize","lbCopies"].forEach(id => $(id).addEventListener("input", renderLabels));
+$("lbPick").addEventListener("change", e => {
+  const id = +e.target.dataset.lb; if(!id) return;
+  const set = LB.what === "kits" ? LB.selK : LB.sel; e.target.checked ? set.add(id) : set.delete(id); renderLabels();
+});
+$("lbAll").addEventListener("change", () => {
+  const set = LB.what === "kits" ? LB.selK : LB.sel;
+  lbList().forEach(x => $("lbAll").checked ? set.add(x.id) : set.delete(x.id)); renderLabels();
+});
+$("lbPrint").onclick = () => {
+  const labels = lbLabels(), per = +$("lbSize").value; if(!labels.length) return;
+  const pages = []; for(let i = 0; i < labels.length; i += per) pages.push(labels.slice(i, i + per));
+  $("printSheet").innerHTML = pages.map(pg => `<div class="lpage s${per}">${pg.map(l => `<div class="lbl"><div class="lq">${qrSvg(l.url)}</div><div class="lt"><b>${esc(l.name)}</b>${l.sub ? `<span>${esc(l.sub)}</span>` : ""}<code>${l.code}</code></div></div>`).join("")}</div>`).join("");
+  setTimeout(() => window.print(), 50);
+};
+
+// =====================================================================
+// ---------- сканер при отгрузке / возврате ----------
+// =====================================================================
+const SCAN = { stream:null, timer:null, last:"", lastAt:0, detector:null, canvas:null, audio:null, busy:false };
+function parseCode(t){
+  t = String(t || "").trim();
+  const m = t.match(/#([ik])-(\d+)/i) || t.match(/^([ik])[-\s]?(\d+)$/i) || (/^\d+$/.test(t) ? ["", "i", t] : null);
+  return m ? { kind:m[1].toLowerCase(), id:+m[2] } : null;
+}
+const prTarget = l => PR.mode === "load" ? +l.qty : (l.qty_out != null ? +l.qty_out : +l.qty);
+function beep(ok){
+  try {
+    const a = SCAN.audio || (SCAN.audio = new (window.AudioContext || window.webkitAudioContext)());
+    const o = a.createOscillator(), g = a.createGain(); o.frequency.value = ok ? 1320 : 220; o.type = ok ? "sine" : "square";
+    g.gain.value = 0.08; o.connect(g); g.connect(a.destination); o.start(); o.stop(a.currentTime + (ok ? 0.08 : 0.25));
+  } catch(_) {}
+}
+function scanFeedback(ok, msg){
+  $("scanMsg").textContent = msg; $("scanMsg").className = "scanmsg " + (ok ? "ok" : "bad");
+  if($("scanBox").hidden) toast(msg);
+  try { navigator.vibrate && navigator.vibrate(ok ? 40 : [90, 60, 90]); } catch(_) {}
+  beep(ok);
+}
+function onScanCode(text, manual){
+  if(!PR.ev || $("prScrim").hidden) return;
+  const now = Date.now();
+  if(!manual && text === SCAN.last && now - SCAN.lastAt < 1600) return;
+  SCAN.last = text; SCAN.lastAt = now;
+  const c = parseCode(text);
+  if(!c) return scanFeedback(false, "Это не наклейка склада");
+  const ls = linesOf(PR.ev.id);
+  if(c.kind === "i"){
+    const it = itemById(c.id), l = ls.find(x => x.item_id === c.id);
+    if(!l) return scanFeedback(false, it ? `«${it.name}» нет в списке этого мероприятия` : "Позиция не найдена");
+    const v = (PR.vals.get(l.id) || 0) + 1; PR.vals.set(l.id, v); renderProcess(l.id);
+    const t = prTarget(l);
+    return scanFeedback(true, `${it.name}: ${v} из ${t}` + (v > t ? " — больше, чем нужно" : v === t ? " ✓" : ""));
+  }
+  const k = kitById(c.id); if(!k) return scanFeedback(false, "Комплект не найден");
+  let n = 0, miss = 0;
+  kitLines(k.id).forEach(x => { const l = ls.find(y => y.item_id === x.item_id); if(l){ PR.vals.set(l.id, (PR.vals.get(l.id) || 0) + +x.qty); n++; } else miss++; });
+  renderProcess();
+  scanFeedback(n > 0, n ? `Комплект «${k.name}»: +${n} поз.` + (miss ? `, ещё ${miss} поз. нет в списке` : "") : `Комплекта «${k.name}» нет в списке`);
+}
+function loadJsQR(){
+  const urls = ["vendor/jsQR.js", "https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js", "https://unpkg.com/jsqr@1.4.0/dist/jsQR.js"];
+  return new Promise(res => { let i = 0; const next = () => { if(window.jsQR || i >= urls.length) return res(); const s = document.createElement("script"); s.src = urls[i++]; s.onload = () => window.jsQR ? res() : next(); s.onerror = next; document.body.appendChild(s); }; next(); });
+}
+async function startScan(){
+  beep(true);
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ scanFeedback(false, "Камера недоступна в этом браузере. Откройте сайт в Safari или Chrome, либо вводите код вручную."); return; }
+  $("scanBox").hidden = false; $("scanMsg").textContent = "Включаю камеру…"; $("scanMsg").className = "scanmsg";
+  try { SCAN.stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:"environment" } }, audio:false }); }
+  catch(_) { $("scanMsg").textContent = "Нет доступа к камере. Разрешите её в настройках браузера или вводите код с наклейки вручную."; $("scanMsg").className = "scanmsg bad"; return; }
+  const v = $("scanVideo"); v.srcObject = SCAN.stream; try { await v.play(); } catch(_) {}
+  if(!SCAN.detector && "BarcodeDetector" in window){ try { const f = await BarcodeDetector.getSupportedFormats(); if(f.includes("qr_code")) SCAN.detector = new BarcodeDetector({ formats:["qr_code"] }); } catch(_) {} }
+  if(!SCAN.detector && !window.jsQR){ $("scanMsg").textContent = "Загружаю распознавание…"; await loadJsQR(); }
+  if(!SCAN.detector && !window.jsQR){ $("scanMsg").textContent = "Не удалось загрузить распознавание QR. Вводите код с наклейки вручную."; $("scanMsg").className = "scanmsg bad"; return; }
+  $("scanMsg").textContent = "Наведите камеру на QR-код"; $("scanMsg").className = "scanmsg";
+  scanTick();
+}
+async function scanTick(){
+  if(!SCAN.stream) return;
+  const v = $("scanVideo");
+  if(v.readyState >= 2 && !SCAN.busy){
+    SCAN.busy = true;
+    try {
+      if(SCAN.detector){ const r = await SCAN.detector.detect(v); if(r && r[0]) onScanCode(r[0].rawValue); }
+      else if(window.jsQR){
+        const w = v.videoWidth, h = v.videoHeight, k = Math.min(1, 640 / Math.max(w, h)), cw = Math.round(w * k), ch = Math.round(h * k);
+        const c = SCAN.canvas || (SCAN.canvas = document.createElement("canvas")); c.width = cw; c.height = ch;
+        const x = c.getContext("2d", { willReadFrequently:true }); x.drawImage(v, 0, 0, cw, ch);
+        const r = window.jsQR(x.getImageData(0, 0, cw, ch).data, cw, ch, { inversionAttempts:"dontInvert" });
+        if(r && r.data) onScanCode(r.data);
+      }
+    } catch(_) {}
+    SCAN.busy = false;
+  }
+  SCAN.timer = setTimeout(scanTick, 120);
+}
+function stopScan(){
+  clearTimeout(SCAN.timer);
+  if(SCAN.stream){ SCAN.stream.getTracks().forEach(t => t.stop()); SCAN.stream = null; }
+  $("scanVideo").srcObject = null; $("scanBox").hidden = true;
+}
+$("prScan").onclick = () => SCAN.stream ? stopScan() : startScan();
+$("scanClose").onclick = stopScan;
+$("prZero").onclick = () => { linesOf(PR.ev.id).forEach(l => PR.vals.set(l.id, 0)); renderProcess(); toast("Счётчики обнулены — сканируйте наклейки"); if(!SCAN.stream) startScan(); };
+$("prCodeForm").addEventListener("submit", e => { e.preventDefault(); const v = $("prCode").value; $("prCode").value = ""; if(v.trim()) onScanCode(v, true); });
+$("prScrim").querySelectorAll("[data-close]").forEach(b => b.addEventListener("click", stopScan));
+$("prScrim").addEventListener("mousedown", e => { if(e.target === $("prScrim")) stopScan(); });
+document.addEventListener("keydown", e => { if(e.key === "Escape") stopScan(); });
+
+// =====================================================================
+// ---------- экран «Сегодня» ----------
+// =====================================================================
+let _todayQ = null;
+function scheduleToday(){ if(_todayQ) return; _todayQ = setTimeout(() => { _todayQ = null; renderToday(); if(SVIEW === "kits") renderKits(); if(SVIEW === "labels") renderLabels(); }, 0); }
+function renderToday(){
+  if(!me || !$("todayView")) return;
+  const t = todayKey(), tm = addDays(t, 1), wk = addDays(t, 14);
+  const leaving = events.filter(e => e.status === "planned" && (e.date_from === t || e.date_from === tm)).sort((a, b) => a.date_from.localeCompare(b.date_from));
+  const out = events.filter(e => e.status === "out").sort((a, b) => a.date_to.localeCompare(b.date_to));
+  const notLoaded = events.filter(e => e.status === "planned" && e.date_to < t);
+  const missing = events.filter(e => e.status === "returned" && e.date_to >= addDays(t, -30)).map(e => ({ e, s:shortagesOf(e) })).filter(x => x.s.length);
+  const confl = events.filter(e => isActive(e) && e.date_from <= wk && e.date_to >= t && (conflictsOf(e).length || crewOf(e.id).some(c => crewBusy(c, e).length || (c.user_id && !EV.schedMissing && personIssues(c.user_id, e.date_from, e.date_to).length))));
+  const repair = items.filter(i => i.state === "Требует ремонта" || i.state === "В ремонте" || i.status === "Не найдено");
+  const mine = events.filter(e => isActive(e) && e.date_to >= t && isMine(e)).sort((a, b) => a.date_from.localeCompare(b.date_from)).slice(0, 3);
+  const alerts = out.filter(e => e.date_to < t).length + notLoaded.length + missing.length + confl.length;
+  $("todayCount").textContent = alerts; $("todayCount").hidden = !alerts;
+
+  // люди сегодня
+  const todayEv = events.filter(e => isActive(e) && e.date_from <= t && e.date_to >= t);
+  const onEvents = []; todayEv.forEach(e => crewOf(e.id).forEach(c => onEvents.push({ who:crewName(c), job:c.job, e })));
+  const staff = Object.values(profiles).filter(p => LV[p.role] >= LV.viewer);
+  const onShift = EV.schedMissing ? [] : staff.map(p => ({ p, d:personDay(p.id, t) })).filter(x => x.d && (x.d.t === "shift" || x.d.t === "busy"));
+
+  const h = new Date().getHours(), hello = h < 5 ? "Доброй ночи" : h < 12 ? "Доброе утро" : h < 18 ? "Добрый день" : "Добрый вечер";
+  const card = (title, body, cls = "", count) => body ? `<section class="tcard ${cls}"><h3>${title}${count != null ? ` <span class="tcnt">${count}</span>` : ""}</h3>${body}</section>` : "";
+  const evs = list => list.length ? `<div class="evcards">${list.map(evCard).join("")}</div>` : "";
+  const outRows = out.map(e => { const late = e.date_to < t, today = e.date_to === t;
+    return `<button type="button" class="trow${late ? " bad" : ""}" data-ev="${e.id}"><span class="tmain"><b>${esc(e.title)}</b><small>${esc(e.venue || "")}${crewOf(e.id).length ? " · " + esc(crewOf(e.id).map(crewName).slice(0, 3).join(", ")) : ""}</small></span>
+      <span class="ttag">${late ? `<span class="chip c-bad xs">должно было вернуться ${fmtD(e.date_to)}</span>` : today ? `<span class="chip c-warn xs">возвращается сегодня</span>` : `<span class="muted">вернётся ${fmtD(e.date_to)}</span>`}</span></button>`; }).join("");
+  const missRows = missing.map(({ e, s }) => `<button type="button" class="trow bad" data-ev="${e.id}"><span class="tmain"><b>${esc(e.title)}</b><small>${esc(s.map(x => (x.it ? x.it.name : "позиция") + " — " + x.miss).join(", "))}</small></span><span class="ttag muted">${fmtD(e.date_to)}</span></button>`).join("");
+  const repRows = repair.map(i => `<button type="button" class="trow" data-item="${i.id}"><span class="tmain"><b>${esc(i.name)}</b><small>${esc(i.note || i.place || "")}</small></span><span class="ttag"><span class="chip ${i.status === "Не найдено" ? "c-bad" : STATES[i.state] || "c-off"} xs">${esc(i.status === "Не найдено" ? "Не найдено" : i.state)}</span></span></button>`).join("");
+  const pplRows = (onEvents.length ? onEvents.map(x => `<button type="button" class="trow" data-ev="${x.e.id}"><span class="tmain"><b>${esc(x.who)}</b><small>${esc(x.job || "")}</small></span><span class="ttag muted">${esc(x.e.title)}</span></button>`).join("") : "")
+    + onShift.map(x => `<div class="trow static"><span class="tmain"><b>${esc(x.p.full_name || x.p.email)}</b><small>${esc(x.d.why)}</small></span><span class="ttag"><span class="chip ${x.d.t === "busy" ? "c-bad" : "c-off"} xs">${x.d.t === "busy" ? "недоступен" : "на смене"}</span></span></div>`).join("");
+
+  const nothing = !leaving.length && !out.length && !alerts && !repair.length;
+  $("todayView").innerHTML = `
+    <div class="thead"><h2 class="evh">${hello}, ${esc((me.full_name || "").split(" ")[0] || "коллега")}</h2><span class="muted">${fmtD(t, { weekday:"long", day:"numeric", month:"long" })}</span></div>
+    ${nothing ? `<div class="empty"><strong>Сегодня спокойно</strong>Выездов и возвратов нет, всё оборудование на месте.</div>` : ""}
+    <div class="tgrid">
+      ${card("Требует внимания", (notLoaded.length ? `<p class="hint">Дата прошла, а отгрузка не отмечена:</p>${evs(notLoaded)}` : "") + (confl.length ? `<p class="hint">Не хватает оборудования или люди заняты (ближайшие 2 недели):</p>${evs(confl)}` : ""), "alert", notLoaded.length + confl.length || null)}
+      ${card("Уезжает сегодня и завтра", evs(leaving), "", leaving.length || null)}
+      ${card("На выезде", outRows, "", out.length || null)}
+      ${card("Не вернулось за 30 дней", missRows, "alert", missing.length || null)}
+      ${mine.length ? card("Мои ближайшие выезды", evs(mine)) : ""}
+      ${card("Люди сегодня", pplRows)}
+      ${card("Ремонт и потери", repRows, "", repair.length || null)}
+    </div>`;
+}
+$("todayView").addEventListener("click", e => {
+  const ev = e.target.closest("[data-ev]"); if(ev){ openEvent(+ev.dataset.ev); return; }
+  const it = e.target.closest("[data-item]"); if(it){ const x = itemById(+it.dataset.item); setStockView("items"); setTab("stock"); if(x) openEditor(x); }
+});
 
 // ---------- журнал: записи о мероприятиях ----------
 function evVal(k, v){
