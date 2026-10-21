@@ -6,9 +6,15 @@
 <title>Склад проката</title>
 <meta name="theme-color" content="#f2a900">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2316191d'/%3E%3Cpath d='M-4 20 20-4M2 26 26 2M8 32 32 8M14 38 38 14' stroke='%23f2a900' stroke-width='4'/%3E%3C/svg%3E">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Склад">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&family=Unbounded:wght@600&display=swap">
-<link rel="stylesheet" href="style.css?v=2026-10-21-quick">
+<link rel="stylesheet" href="style.css?v=2026-10-21-app">
 </head>
 <body>
 
@@ -193,6 +199,7 @@
         <span><i class="cell ev"></i>на мероприятии</span>
         <span class="hint">Нажмите на имя, чтобы настроить график.</span>
       </div>
+      <div id="pushSetup"></div>
       <h3 class="sect">Сотрудники и роли</h3>
       <div class="card flat"><div id="userList"></div></div>
       <div class="legend">
@@ -357,6 +364,20 @@
   </div>
 </div>
 
+<!-- ============ В календарь ============ -->
+<div class="scrim" id="calScrim" hidden>
+  <div class="sheet narrow">
+    <h3 class="h2">Добавить в календарь</h3>
+    <p class="hint" id="calHint"></p>
+    <div class="calopts">
+      <button type="button" class="btn primary" id="calIcs">Календарь телефона (iPhone, Android)</button>
+      <a class="btn" id="calGoogle" href="#" target="_blank" rel="noopener">Google Календарь</a>
+    </div>
+    <p class="hint">Напоминание придёт накануне вечером. Если дату мероприятия потом изменят, добавьте его в календарь заново.</p>
+    <div class="actions"><button type="button" class="btn" data-close="calScrim">Закрыть</button></div>
+  </div>
+</div>
+
 <!-- ============ Быстрый прокат ============ -->
 <div class="scrim" id="qkScrim" hidden>
   <form class="sheet" id="qkForm" novalidate>
@@ -448,6 +469,13 @@
 <div class="toast" id="toast" hidden></div>
 <div id="printSheet" aria-hidden="true"></div>
 <script src="vendor/qrcode.js?v=1"></script>
+<script>
+/* Приложение: регистрируем service worker (работа без сети, push). */
+if("serviceWorker" in navigator && location.protocol === "https:"){
+  window.addEventListener("load", function(){ navigator.serviceWorker.register("sw.js").catch(function(){}); });
+  navigator.serviceWorker.addEventListener("message", function(e){ if(e.data && e.data.goto) location.href = e.data.goto; });
+}
+</script>
 
 <script>
 /* Загрузка: config.js и app.js без кэша, библиотека Supabase — с запасного CDN, если основной недоступен. */

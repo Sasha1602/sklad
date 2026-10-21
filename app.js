@@ -31,7 +31,7 @@ function errText(e){
   if(/Email not confirmed/i.test(m)) return "Почта не подтверждена. Откройте письмо от Supabase и перейдите по ссылке.";
   if(/already registered/i.test(m)) return "Такая почта уже зарегистрирована. Войдите или восстановите пароль.";
   if(/row-level security|permission denied/i.test(m)) return "Недостаточно прав для этого действия.";
-  if(/Failed to fetch|NetworkError/i.test(m)) return "Нет связи с сервером. Проверьте интернет.";
+  if(/Failed to fetch|NetworkError|Load failed/i.test(m)) return "Нет связи с сервером. Проверьте интернет.";
   return m || "Что-то пошло не так. Попробуйте ещё раз.";
 }
 
@@ -111,7 +111,8 @@ async function boot(){
   if(recovering || started) return;
   started = true;
   const uid = session.user.id;
-  const { data: prof, error } = await sb.from("profiles").select("*").eq("id", uid).maybeSingle();
+  let { data: prof, error } = await sb.from("profiles").select("*").eq("id", uid).maybeSingle();
+  if(error && isNetErr(error)){ const snap = loadSnap(uid); if(snap && snap.me){ prof = snap.me; error = null; } }
   if(error){ started = false; show("authView"); authMsg(errText(error)); return; }
   if(!prof || prof.role === "pending"){
     $("pendingEmail").textContent = session.user.email; show("pendingView");
@@ -133,28 +134,13 @@ async function startApp(){
   $("meName").onclick = () => openSchedule(me.id);
   $("addBtn").hidden = !can("manager");
 
-  const [it, pr, lg, ev, el, cr, ss, sp, kt, ki] = await Promise.all([
-    sb.from("items").select("*").order("id"),
-    sb.from("profiles").select("*").order("created_at"),
-    sb.from("item_log").select("*").order("created_at", { ascending:false }).limit(300),
-    sb.from("events").select("*").order("date_from"),
-    sb.from("event_items").select("*").order("id"),
-    sb.from("event_crew").select("*").order("id"),
-    sb.from("staff_schedule").select("*"),
-    sb.from("staff_periods").select("*").order("date_from"),
-    sb.from("kits").select("*").order("name"),
-    sb.from("kit_items").select("*").order("id")
-  ]);
-  if(it.error){ toast(errText(it.error)); }
-  items = it.data || []; logRows = lg.data || [];
-  (pr.data || []).forEach(p => profiles[p.id] = p);
-  if(ev.error || el.error){ EV.missing = true; } else { events = ev.data || []; lines = el.data || []; }
-  if(cr.error){ EV.crewMissing = true; } else crew = cr.data || [];
-  if(ss.error || sp.error){ EV.schedMissing = true; } else { schedules = ss.data || []; periods = sp.data || []; }
-  if(kt.error || ki.error){ KIT.missing = true; } else { kits = kt.data || []; kitItems = ki.data || []; }
-  renderStock(); renderLog(); renderUsers(); renderEvents();
+  // мгновенно показываем последний снимок, потом подтягиваем свежие данные
+  const snap = loadSnap(me.id);
+  if(snap){ applySnap(snap); renderStock(); renderEvents(); renderUsers(); renderLog(); renderToday(); }
+  const ok = await loadAll();
   subscribe();
-  renderToday(); renderKits();
+  if(ok) flushOutbox();
+  refreshPushState();
   route(location.hash.slice(1) || "today");
 }
 // Переход по адресу: #today, #stock, #ev-12, #i-5 (позиция), #k-3 (комплект)…
@@ -293,7 +279,7 @@ function rowHtml(i){
 }
 
 async function updateItem(id, patch, quiet){
-  const { error } = await sb.from("items").update(patch).eq("id", id);
+  const { error } = await dbUpdate("items", id, patch);
   if(error){ toast(errText(error)); const { data } = await sb.from("items").select("*").eq("id", id).maybeSingle(); if(data){ const k = items.findIndex(i => i.id === id); if(k >= 0) items[k] = data; renderStock(); } return false; }
   if(!quiet) toast("Сохранено"); return true;
 }
@@ -349,7 +335,7 @@ $("scrim").addEventListener("mousedown", e => { if(e.target === $("scrim")) clos
 document.addEventListener("keydown", e => {
   if(e.key !== "Escape") return;
   if(!$("scrim").hidden) closeEditor();
-  ["evScrim","pkScrim","prScrim","crScrim","scScrim","kitScrim","ekScrim","qkScrim","bdScrim"].forEach(id => $(id).hidden = true);
+  ["evScrim","pkScrim","prScrim","crScrim","scScrim","kitScrim","ekScrim","qkScrim","bdScrim","calScrim"].forEach(id => $(id).hidden = true);
 });
 $("form").addEventListener("submit", async e => {
   e.preventDefault();
@@ -407,7 +393,27 @@ function renderUsers(){
     <select class="field" data-uid="${p.id}" aria-label="Роль" ${p.id === me.id || !A ? "disabled" : ""}>${Object.keys(ROLES).map(r => `<option value="${r}" ${r === p.role ? "selected" : ""}>${ROLES[r]}</option>`).join("")}</select></div>
   </div>`).join("");
   renderAvail();
+  renderPushSetup();
 }
+function renderPushSetup(){
+  const box = $("pushSetup"); if(!box) return;
+  if(!can("admin")){ box.innerHTML = ""; return; }
+  box.innerHTML = pushKey()
+    ? `<h3 class="sect">Уведомления</h3><p class="hint">Ключ уведомлений настроен. Каждый сотрудник включает уведомления у себя на экране «Сегодня».</p>`
+    : `<h3 class="sect">Уведомления</h3><p class="hint">Уведомления ещё не настроены. Сгенерируйте ключи и следуйте инструкции из README («Push-уведомления»). Ключи создаются прямо в вашем браузере и никуда не отправляются.</p>
+       <button type="button" class="btn" data-genkeys>Сгенерировать ключи</button><div id="keysOut"></div>`;
+}
+document.addEventListener("click", async e => {
+  if(!e.target.closest("[data-genkeys]")) return;
+  let k;
+  try { k = await genVapid(); } catch(ex){ $("keysOut").innerHTML = `<p class="msg">Не удалось создать ключи: браузер не поддерживает шифрование или сайт открыт не по https. Откройте сайт по адресу https://… в Chrome или Safari.</p>`; return; }
+  $("keysOut").innerHTML = `<div class="keys">
+    <p><b>1. В config.js</b> добавьте строку (публичный ключ):</p><pre>PUSH_PUBLIC_KEY: "${k.pub}",</pre>
+    <p><b>2. В Supabase → Edge Functions → Secrets</b> добавьте секреты:</p>
+    <pre>VAPID_PUBLIC_KEY = ${k.pub}\nVAPID_PRIVATE_KEY = ${k.priv}\nVAPID_SUBJECT = mailto:${esc(me.email || "admin@example.com")}\nNOTIFY_SECRET = ${k.secret}</pre>
+    <p><b>3. Секрет NOTIFY_SECRET</b> также понадобится в 07_push.sql (шаг из README).</p>
+    <p class="hint">Сохраните эти значения сейчас: закрытый ключ больше нигде не появится. Никому его не пересылайте.</p></div>`.replace(/\\n/g, "\n");
+});
 $("userList").addEventListener("click", e => { const b = e.target.closest("[data-sched]"); if(b) openSchedule(b.dataset.sched); });
 $("userList").addEventListener("change", async e => {
   const sel = e.target; if(!sel.dataset.uid) return;
@@ -648,6 +654,7 @@ function renderEventDetail(e){
   if(M && (e.status === "planned" || e.status === "out") && kits.length) acts.push(btn("kit", "+ Комплект"));
   if(M) acts.push(btn("edit", "Изменить"));
   if(ls.length) acts.push(btn("copy", "Копировать список", "ghost"));
+  if(e.status !== "cancelled") acts.push(btn("cal", "В календарь", "ghost"));
   acts.push(`<span class="sp"></span>`);
   if(M && e.status === "planned") acts.push(btn("cancel", "Отменить мероприятие", "ghost"));
   if(M && e.status === "cancelled") acts.push(btn("restore", "Восстановить"));
@@ -767,6 +774,7 @@ $("evDetail").addEventListener("click", async ev => {
   if(a === "load") openProcess(e, "load");
   if(a === "return") openProcess(e, "return");
   if(a === "copy") copyEventList(e);
+  if(a === "cal"){ $("calHint").textContent = `«${e.title}», ${fmtRange(e)}${e.venue ? ", " + e.venue : ""}`; $("calGoogle").href = googleCalUrl(e); CAL.ev = e; $("calScrim").hidden = false; }
   if(a === "cancel") setEvStatus(e, "cancelled", "Мероприятие отменено, бронь снята");
   if(a === "restore") setEvStatus(e, "planned", "Мероприятие восстановлено");
   if(a === "reopen") setEvStatus(e, "out", "Мероприятие снова на выезде");
@@ -787,12 +795,12 @@ function setLineQty(l, v){
   l.qty = v; renderEvents(); renderStock();
   clearTimeout(lineTimers[l.id]);
   lineTimers[l.id] = setTimeout(async () => {
-    const { error } = await sb.from("event_items").update({ qty:v }).eq("id", l.id);
+    const { error } = await dbUpdate("event_items", l.id, { qty:v });
     if(error) toast(errText(error));
   }, 600);
 }
 async function setEvStatus(e, status, msg){
-  const { error } = await sb.from("events").update({ status }).eq("id", e.id);
+  const { error } = await dbUpdate("events", e.id, { status });
   if(error){ toast(errText(error)); return false; }
   e.status = status; renderEvents(); renderStock(); if(msg) toast(msg); return true;
 }
@@ -950,7 +958,7 @@ $("prList").addEventListener("change", ev => {
 $("prSave").onclick = async () => {
   const e = PR.ev, field = PR.mode === "load" ? "qty_out" : "qty_back";
   $("prSave").disabled = true;
-  const res = await Promise.all([...PR.vals].map(([id, v]) => sb.from("event_items").update({ [field]:v }).eq("id", id)));
+  const res = await Promise.all([...PR.vals].map(([id, v]) => dbUpdate("event_items", id, { [field]:v })));
   const bad = res.find(r => r.error);
   if(bad){ $("prSave").disabled = false; $("prErr").textContent = errText(bad.error); $("prErr").hidden = false; return; }
   PR.vals.forEach((v, id) => { const l = lines.find(x => x.id === id); if(l) l[field] = v; });
@@ -1001,7 +1009,7 @@ $("crForm").addEventListener("submit", async ev => {
 $("evMine").addEventListener("change", () => { EV.mine = $("evMine").checked; try { localStorage.setItem("sklad.evMine", EV.mine ? "1" : "0"); } catch(_) {} renderEvents(); });
 
 document.querySelectorAll("[data-close]").forEach(b => b.onclick = () => $(b.dataset.close).hidden = true);
-["evScrim","pkScrim","prScrim","crScrim","kitScrim","ekScrim","qkScrim"].forEach(id => $(id).addEventListener("mousedown", e => { if(e.target === $(id)) $(id).hidden = true; }));
+["evScrim","pkScrim","prScrim","crScrim","kitScrim","ekScrim","qkScrim","calScrim"].forEach(id => $(id).addEventListener("mousedown", e => { if(e.target === $(id)) $(id).hidden = true; }));
 
 // =====================================================================
 // ---------- графики сотрудников ----------
@@ -1509,7 +1517,7 @@ document.addEventListener("keydown", e => { if(e.key === "Escape") stopScan(); }
 // ---------- экран «Сегодня» ----------
 // =====================================================================
 let _todayQ = null;
-function scheduleToday(){ if(_todayQ) return; _todayQ = setTimeout(() => { _todayQ = null; renderToday(); if(SVIEW === "kits") renderKits(); if(SVIEW === "labels") renderLabels(); }, 0); }
+function scheduleToday(){ if(_todayQ) return; _todayQ = setTimeout(() => { _todayQ = null; renderToday(); saveSnap(); if(SVIEW === "kits") renderKits(); if(SVIEW === "labels") renderLabels(); }, 0); }
 function renderToday(){
   if(!me || !$("todayView")) return;
   const t = todayKey(), tm = addDays(t, 1), wk = addDays(t, 14);
@@ -1544,6 +1552,7 @@ function renderToday(){
   $("todayView").innerHTML = `
     <div class="thead"><h2 class="evh">${hello}, ${esc((me.full_name || "").split(" ")[0] || "коллега")}</h2><span class="muted">${fmtD(t, { weekday:"long", day:"numeric", month:"long" })}</span>
       ${can("worker") && !EV.missing ? `<button type="button" class="btn tquick" data-quick><svg class="ti" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg> Быстрый прокат</button>` : ""}</div>
+    ${appBanner()}
     ${nothing ? `<div class="empty"><strong>Сегодня спокойно</strong>Выездов и возвратов нет, всё оборудование на месте.</div>` : ""}
     <div class="tgrid">
       ${card("Требует внимания", (notLoaded.length ? `<p class="hint">Дата прошла, а отгрузка не отмечена:</p>${evs(notLoaded)}` : "") + (confl.length ? `<p class="hint">Не хватает оборудования или люди заняты (ближайшие 2 недели):</p>${evs(confl)}` : ""), "alert", notLoaded.length + confl.length || null)}
@@ -1701,6 +1710,234 @@ async function saveBuild(ship){
 }
 $("bdShip").onclick = () => saveBuild(true);
 $("bdSave").onclick = () => saveBuild(false);
+
+// =====================================================================
+// ---------- приложение: установка, календарь, офлайн, уведомления ----------
+// =====================================================================
+const isStandalone = () => (window.matchMedia && matchMedia("(display-mode: standalone)").matches) || navigator.standalone === true;
+const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+let installEvt = null;
+window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); installEvt = e; scheduleToday(); });
+window.addEventListener("appinstalled", () => { installEvt = null; toast("Приложение установлено"); scheduleToday(); });
+const lsGet = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch(_) { return d; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch(_) {} };
+
+// Карточка «Приложение» на экране «Сегодня»: установка и уведомления.
+function appBanner(){
+  if(lsGet("sklad.appBannerHidden", false)) return "";
+  const parts = [];
+  if(!isStandalone()){
+    if(installEvt) parts.push(`<p>Установите «Склад» как приложение — иконка на экране, открывается без браузера, работает без связи.</p><button type="button" class="btn primary" data-install>Установить приложение</button>`);
+    else if(isIOS()) parts.push(`<p><b>Установите приложение:</b> в Safari нажмите <span class="kbd">Поделиться</span> (квадрат со стрелкой) → <span class="kbd">На экран «Домой»</span>. Уведомления на iPhone работают только в установленном приложении.</p>`);
+  }
+  const ps = pushState();
+  if(ps === "can") parts.push(`<p>Получайте уведомления: завтрашние выезды, просроченные возвраты, ремонт.</p><button type="button" class="btn" data-pushon>Включить уведомления</button>`);
+  if(ps === "denied") parts.push(`<p class="muted">Уведомления запрещены в настройках браузера или телефона.</p>`);
+  if(!parts.length) return "";
+  return `<section class="tcard appcard"><h3>Приложение <button type="button" class="link appclose" data-apphide aria-label="Скрыть">скрыть</button></h3>${parts.join("")}</section>`;
+}
+
+// ---------- календарь телефона ----------
+function icsEsc(s){ return String(s || "").replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n"); }
+function icsFold(line){
+  const enc = new TextEncoder(), out = []; let cur = "", len = 0;
+  for(const ch of line){ const b = enc.encode(ch).length; if(len + b > 73){ out.push(cur); cur = " " + ch; len = 1 + b; } else { cur += ch; len += b; } }
+  out.push(cur); return out.join("\r\n");
+}
+const icsDate = k => k.replace(/-/g, "");
+function eventIcs(e){
+  const cr = crewOf(e.id).map(c => crewName(c) + (c.job ? " (" + c.job + ")" : "") + (c.phone ? " " + c.phone : ""));
+  const ls = linesOf(e.id), link = siteBase() + "#ev-" + e.id;
+  const desc = [e.client ? "Заказчик: " + e.client : "", personName(e.responsible) ? "Ответственный: " + personName(e.responsible) : "",
+    cr.length ? "Команда: " + cr.join(", ") : "", ls.length ? "Оборудование: " + ls.length + " поз." : "", e.note || "", link].filter(Boolean).join("\n");
+  const now = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+/, "");
+  return ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Sklad prokata//RU", "CALSCALE:GREGORIAN", "METHOD:PUBLISH", "BEGIN:VEVENT",
+    "UID:sklad-ev-" + e.id + "@" + location.hostname, "DTSTAMP:" + now,
+    "DTSTART;VALUE=DATE:" + icsDate(e.date_from), "DTEND;VALUE=DATE:" + icsDate(addDays(e.date_to, 1)),
+    "SUMMARY:" + icsEsc(e.title), e.venue ? "LOCATION:" + icsEsc(e.venue) : "", "DESCRIPTION:" + icsEsc(desc), "URL:" + link,
+    "BEGIN:VALARM", "TRIGGER:-PT6H", "ACTION:DISPLAY", "DESCRIPTION:" + icsEsc(e.title), "END:VALARM",
+    "END:VEVENT", "END:VCALENDAR"].filter(Boolean).map(icsFold).join("\r\n") + "\r\n";
+}
+function addToCalendar(e){
+  const ics = eventIcs(e), name = "event-" + e.id + ".ics";
+  if(isIOS()){ location.href = "data:text/calendar;charset=utf-8," + encodeURIComponent(ics); return; }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([ics], { type:"text/calendar;charset=utf-8" })); a.download = name;
+  document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+  toast("Файл календаря скачан — откройте его, чтобы добавить событие");
+}
+function googleCalUrl(e){
+  const p = new URLSearchParams({ action:"TEMPLATE", text:e.title, dates:icsDate(e.date_from) + "/" + icsDate(addDays(e.date_to, 1)),
+    details:(e.client ? "Заказчик: " + e.client + "\n" : "") + siteBase() + "#ev-" + e.id, location:e.venue || "" });
+  return "https://calendar.google.com/calendar/render?" + p.toString();
+}
+
+// =====================================================================
+// ---------- офлайн: снимок данных и очередь изменений ----------
+// =====================================================================
+const OFF = { offline:false, snapAt:null, q:lsGet("sklad.outbox", []), flushing:false };
+const isNetErr = e => !!e && /Failed to fetch|NetworkError|Load failed|network|fetch failed|Network request failed|ERR_INTERNET|timed? ?out/i.test(String(e.message || e));
+function saveSnap(){
+  if(!me) return;
+  lsSet("sklad.snap", { t:Date.now(), uid:me.id, me, items, profiles, logRows:logRows.slice(0, 100), events, lines, crew, schedules, periods, kits, kitItems,
+    flags:{ ev:EV.missing, cr:EV.crewMissing, sc:EV.schedMissing, kit:KIT.missing } });
+}
+function loadSnap(uid){
+  const s = lsGet("sklad.snap", null); if(!s || (uid && s.uid !== uid)) return null; return s;
+}
+function applySnap(s){
+  items = s.items || []; profiles = s.profiles || {}; logRows = s.logRows || []; events = s.events || []; lines = s.lines || [];
+  crew = s.crew || []; schedules = s.schedules || []; periods = s.periods || []; kits = s.kits || []; kitItems = s.kitItems || [];
+  EV.missing = !!s.flags?.ev; EV.crewMissing = !!s.flags?.cr; EV.schedMissing = !!s.flags?.sc; KIT.missing = !!s.flags?.kit;
+  OFF.snapAt = s.t;
+}
+function setOffline(on){
+  OFF.offline = on; renderNetBadge();
+  if(on && !OFF.retry) OFF.retry = setInterval(tryReconnect, 20000);
+  if(!on && OFF.retry){ clearInterval(OFF.retry); OFF.retry = null; }
+}
+function renderNetBadge(){
+  let b = $("netBanner");
+  if(!b){ b = document.createElement("div"); b.id = "netBanner"; b.className = "netbanner"; document.querySelector("#appView main").prepend(b); }
+  const n = OFF.q.length;
+  if(!OFF.offline && !n){ b.hidden = true; return; }
+  b.hidden = false;
+  b.className = "netbanner" + (OFF.offline ? " off" : "");
+  b.innerHTML = OFF.offline
+    ? `<b>Нет связи с базой.</b> Показаны данные от ${OFF.snapAt ? new Date(OFF.snapAt).toLocaleString("ru-RU", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" }) : "последнего входа"}. Отметки количества, отгрузки и возврата сохраняются${n ? ` — в очереди: ${n}` : ""} и отправятся, когда связь появится. <button type="button" class="link" data-retry>Проверить связь</button>`
+    : `Отправляю отложенные изменения: ${n}…`;
+}
+document.addEventListener("click", e => { if(e.target.closest("[data-retry]")) tryReconnect(true); });
+window.addEventListener("online", () => tryReconnect());
+async function tryReconnect(manual){
+  if(!me) return;
+  const r = await sb.from("profiles").select("id").eq("id", me.id).limit(1);
+  if(r.error){ if(manual) toast("Связи пока нет"); return; }
+  const wasOff = OFF.offline;
+  setOffline(false);
+  await flushOutbox();
+  if(wasOff){ await loadAll(); toast("Связь восстановлена — данные обновлены"); }
+}
+// Обновление с очередью: без связи изменение откладывается, а не теряется.
+async function dbUpdate(table, id, patch){
+  if(!OFF.offline){
+    const r = await sb.from(table).update(patch).eq("id", id);
+    if(!r.error || !isNetErr(r.error)) return r;
+    setOffline(true);
+  }
+  OFF.q.push({ table, id, patch, at:Date.now() }); lsSet("sklad.outbox", OFF.q); renderNetBadge(); scheduleToday();
+  return { error:null, queued:true };
+}
+async function flushOutbox(){
+  if(OFF.flushing || !OFF.q.length) return;
+  OFF.flushing = true; renderNetBadge();
+  let sent = 0;
+  while(OFF.q.length){
+    const x = OFF.q[0];
+    const r = await sb.from(x.table).update(x.patch).eq("id", x.id);
+    if(r.error && isNetErr(r.error)){ setOffline(true); break; }
+    if(r.error) toast("Не удалось отправить отложенное изменение: " + errText(r.error));
+    else sent++;
+    OFF.q.shift(); lsSet("sklad.outbox", OFF.q);
+  }
+  OFF.flushing = false; renderNetBadge();
+  if(sent) toast(`Отправлено отложенных изменений: ${sent}`);
+}
+
+// Загрузка всех данных (используется при старте и после восстановления связи).
+async function loadAll(){
+  const res = await Promise.all([
+    sb.from("items").select("*").order("id"),
+    sb.from("profiles").select("*").order("created_at"),
+    sb.from("item_log").select("*").order("created_at", { ascending:false }).limit(300),
+    sb.from("events").select("*").order("date_from"),
+    sb.from("event_items").select("*").order("id"),
+    sb.from("event_crew").select("*").order("id"),
+    sb.from("staff_schedule").select("*"),
+    sb.from("staff_periods").select("*").order("date_from"),
+    sb.from("kits").select("*").order("name"),
+    sb.from("kit_items").select("*").order("id")
+  ]);
+  const [it, pr, lg, ev, el, cr, ss, sp, kt, ki] = res;
+  if(it.error && isNetErr(it.error)){
+    const s = loadSnap(me.id);
+    if(s){ applySnap(s); setOffline(true); return false; }
+    toast(errText(it.error)); setOffline(true); return false;
+  }
+  if(it.error) toast(errText(it.error));
+  items = it.data || []; logRows = lg.data || [];
+  profiles = {}; (pr.data || []).forEach(p => profiles[p.id] = p);
+  if(ev.error || el.error){ EV.missing = true; } else { EV.missing = false; events = ev.data || []; lines = el.data || []; }
+  if(cr.error){ EV.crewMissing = true; } else { EV.crewMissing = false; crew = cr.data || []; }
+  if(ss.error || sp.error){ EV.schedMissing = true; } else { EV.schedMissing = false; schedules = ss.data || []; periods = sp.data || []; }
+  if(kt.error || ki.error){ KIT.missing = true; } else { KIT.missing = false; kits = kt.data || []; kitItems = ki.data || []; }
+  // локальные отложенные изменения поверх свежих данных
+  OFF.q.forEach(x => { const arr = { items, event_items:lines, events }[x.table]; const r = arr && arr.find(y => y.id === x.id); if(r) Object.assign(r, x.patch); });
+  renderStock(); renderLog(); renderUsers(); renderEvents(); renderKits(); renderToday();
+  saveSnap();
+  return true;
+}
+
+// =====================================================================
+// ---------- push-уведомления ----------
+// =====================================================================
+const pushKey = () => (cfg.PUSH_PUBLIC_KEY || "").trim();
+const pushSupported = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window && location.protocol === "https:";
+let pushSubscribed = null;
+function pushState(){
+  if(!pushKey() || !pushSupported()) return "none";
+  if(Notification.permission === "denied") return "denied";
+  if(pushSubscribed === true) return "on";
+  return pushSubscribed === null ? "unknown" : "can";
+}
+async function refreshPushState(){
+  if(!pushKey() || !pushSupported()){ pushSubscribed = false; return; }
+  try { const reg = await navigator.serviceWorker.ready; const sub = await reg.pushManager.getSubscription(); pushSubscribed = !!sub; if(sub) savePushSub(sub); }
+  catch(_) { pushSubscribed = false; }
+  scheduleToday();
+}
+const b64uToBytes = s => { s = s.replace(/-/g, "+").replace(/_/g, "/"); while(s.length % 4) s += "="; return Uint8Array.from(atob(s), c => c.charCodeAt(0)); };
+const bytesToB64u = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+async function savePushSub(sub){
+  const j = sub.toJSON();
+  const { error } = await sb.from("push_subs").upsert({ endpoint:j.endpoint, p256dh:j.keys.p256dh, auth:j.keys.auth, user_id:me.id, ua:navigator.userAgent.slice(0, 200) }, { onConflict:"endpoint" });
+  return error;
+}
+async function enablePush(){
+  if(isIOS() && !isStandalone()){ toast("На iPhone сначала установите приложение на экран «Домой», затем включите уведомления в нём"); return; }
+  try {
+    const perm = await Notification.requestPermission();
+    if(perm !== "granted"){ toast("Уведомления не разрешены"); scheduleToday(); return; }
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.subscribe({ userVisibleOnly:true, applicationServerKey:b64uToBytes(pushKey()) });
+    const err = await savePushSub(sub);
+    if(err){ toast(/push_subs/.test(err.message || "") ? "Уведомления ещё не настроены в базе (нужен 07_push.sql)" : errText(err)); return; }
+    pushSubscribed = true; toast("Уведомления включены"); scheduleToday();
+  } catch(ex){ toast("Не удалось включить уведомления: " + (ex.message || ex)); }
+}
+async function disablePush(){
+  try { const reg = await navigator.serviceWorker.ready; const sub = await reg.pushManager.getSubscription();
+    if(sub){ await sb.from("push_subs").delete().eq("endpoint", sub.endpoint); await sub.unsubscribe(); } } catch(_) {}
+  pushSubscribed = false; toast("Уведомления выключены"); scheduleToday();
+}
+$("todayView").addEventListener("click", e => {
+  if(e.target.closest("[data-install]") && installEvt){ installEvt.prompt(); installEvt.userChoice.finally(() => { installEvt = null; scheduleToday(); }); }
+  if(e.target.closest("[data-pushon]")) enablePush();
+  if(e.target.closest("[data-pushoff]")) disablePush();
+  if(e.target.closest("[data-apphide]")){ lsSet("sklad.appBannerHidden", true); renderToday(); }
+});
+
+// ---------- ключи для уведомлений (администратор, один раз) ----------
+async function genVapid(){
+  const kp = await crypto.subtle.generateKey({ name:"ECDSA", namedCurve:"P-256" }, true, ["sign", "verify"]);
+  const jwk = await crypto.subtle.exportKey("jwk", kp.privateKey);
+  const pub = new Uint8Array(await crypto.subtle.exportKey("raw", kp.publicKey));
+  return { pub:bytesToB64u(pub), priv:jwk.d, secret:bytesToB64u(crypto.getRandomValues(new Uint8Array(24))) };
+}
+
+const CAL = { ev:null };
+$("calIcs").onclick = () => { if(CAL.ev) addToCalendar(CAL.ev); $("calScrim").hidden = true; };
+$("calGoogle").addEventListener("click", () => setTimeout(() => $("calScrim").hidden = true, 100));
 
 // ---------- журнал: записи о мероприятиях ----------
 function evVal(k, v){
