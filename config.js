@@ -6,5 +6,6 @@
 window.SKLAD_CONFIG = {
   SUPABASE_URL: "https://ifrqavomvqlvdupwlzxc.supabase.co",
   SUPABASE_KEY: "sb_publishable_4qkGa9gDOquHOKdTzzwk7Q_haRl1NrI",
-  TITLE: "Склад проката"
+  TITLE: "Склад проката",
+  PUSH_PUBLIC_KEY: "BN7eZ_C9NRAZKZ4aerW27eyyuaJg6xsl7QJnrhP6qzHrCOu_QLtxDaFN6RKR67dH5TJK6sDL7cMrJw7W9F-w260",
 };
