@@ -5,6 +5,6 @@
 // НИКОГДА не вставляйте сюда service_role / secret ключ.
 window.SKLAD_CONFIG = {
   SUPABASE_URL: "https://ВАШ-ПРОЕКТ.supabase.co",
-  SUPABASE_KEY: "ВСТАВЬТЕ_ANON_ИЛИ_PUBLISHABLE_КЛЮЧ",
+  SUPABASE_KEY: "sb_publishable_4qkGa9gDOquHOKdTzzwk7Q_haRl1NrI",
   TITLE: "Склад проката"
 };
