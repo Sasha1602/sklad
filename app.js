@@ -54,7 +54,7 @@ if(window.SKLAD_LIB_FAILED || !window.supabase){
 }
 const sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_KEY, { auth:{ persistSession:true, autoRefreshToken:true, detectSessionInUrl:true } });
 
-let me = null, items = [], profiles = {}, logRows = [], events = [], lines = [], crew = [], schedules = [], periods = [], kits = [], kitItems = [], venues = [], halls = [], channel = null, started = false, recovering = false;
+let me = null, items = [], profiles = {}, logRows = [], events = [], lines = [], crew = [], schedules = [], periods = [], kits = [], kitItems = [], venues = [], halls = [], shiftTypes = [], staffDays = [], channel = null, started = false, recovering = false;
 
 opts($("fCat"), CATS, true); opts($("fState"), Object.keys(STATES), true); opts($("fStatus"), Object.keys(STATUSES), true);
 opts($("e_category"), CATS); opts($("e_state"), Object.keys(STATES)); opts($("e_status"), Object.keys(STATUSES)); opts($("e_unit"), UNITS);
@@ -197,6 +197,15 @@ function subscribe(){
     })
     .on("postgres_changes", { event:"*", schema:"public", table:"venue_halls" }, p => {
       halls = upsertRow(halls, p); renderEvents(); if(!$("vnScrim").hidden) renderVenues();
+    })
+    .on("postgres_changes", { event:"*", schema:"public", table:"shift_types" }, p => {
+      shiftTypes = upsertRow(shiftTypes, p); renderUsers(); renderEvents();
+    })
+    .on("postgres_changes", { event:"*", schema:"public", table:"staff_days" }, p => {
+      const key = r => r.user_id + "|" + r.day;
+      if(p.eventType === "DELETE") staffDays = staffDays.filter(x => key(x) !== key(p.old));
+      else { const k = staffDays.findIndex(x => key(x) === key(p.new)); if(k >= 0) staffDays[k] = p.new; else staffDays.push(p.new); }
+      renderUsers(); renderEvents(); scheduleToday();
     })
     .on("postgres_changes", { event:"INSERT", schema:"public", table:"item_log" }, p => {
       logRows.unshift(p.new); logRows = logRows.slice(0, 300); renderLog();
@@ -1060,11 +1069,18 @@ function personDay(uid, k){
   const ps = periods.filter(p => p.user_id === uid && p.date_from <= k && p.date_to >= k);
   const busy = ps.find(p => p.kind === "busy");
   if(busy) return { t:"busy", why:busy.note || "Недоступен" };
+  // Отметка на этот день из приложения «Смены» важнее графика: другая смена, обмен или выходной.
+  const ov = staffDays.find(d => d.user_id === uid && d.day === k);
+  if(ov){
+    const st = ov.shift_type_id && shiftTypes.find(t => t.id === ov.shift_type_id);
+    return st && st.is_work ? { t:"shift", why:st.name + (ov.note ? " — " + ov.note : "") } : null;
+  }
   const sc = scheduleOf(uid);
   if(sc){
     const vac = ps.find(p => p.kind === "free");
     const cyc = sc.work_days + sc.off_days, m = ((dayDiff(k, sc.anchor) % cyc) + cyc) % cyc;
-    if(m < sc.work_days) return vac ? { t:"vac", why:vac.note || "Отпуск на основной работе" } : { t:"shift", why:(sc.label || "Основная работа") + " — смена" };
+    const pst = sc.shift_type_id && shiftTypes.find(t => t.id === sc.shift_type_id);
+    if(m < sc.work_days) return vac ? { t:"vac", why:vac.note || "Отпуск на основной работе" } : { t:"shift", why:pst ? pst.name : (sc.label || "Основная работа") + " — смена" };
     if(vac) return { t:"vac", why:vac.note || "Отпуск на основной работе" };
   }
   return null;
@@ -1995,7 +2011,7 @@ const OFF = { offline:false, snapAt:null, q:lsGet("sklad.outbox", []), flushing:
 const isNetErr = e => !!e && /Failed to fetch|NetworkError|Load failed|network|fetch failed|Network request failed|ERR_INTERNET|timed? ?out/i.test(String(e.message || e));
 function saveSnap(){
   if(!me) return;
-  lsSet("sklad.snap", { t:Date.now(), uid:me.id, me, items, profiles, logRows:logRows.slice(0, 100), events, lines, crew, schedules, periods, kits, kitItems, venues, halls,
+  lsSet("sklad.snap", { t:Date.now(), uid:me.id, me, items, profiles, logRows:logRows.slice(0, 100), events, lines, crew, schedules, periods, kits, kitItems, venues, halls, shiftTypes, staffDays,
     flags:{ ev:EV.missing, cr:EV.crewMissing, sc:EV.schedMissing, kit:KIT.missing } });
 }
 function loadSnap(uid){
@@ -2003,7 +2019,7 @@ function loadSnap(uid){
 }
 function applySnap(s){
   items = s.items || []; profiles = s.profiles || {}; logRows = s.logRows || []; events = s.events || []; lines = s.lines || [];
-  crew = s.crew || []; schedules = s.schedules || []; periods = s.periods || []; kits = s.kits || []; kitItems = s.kitItems || []; venues = s.venues || []; halls = s.halls || [];
+  crew = s.crew || []; schedules = s.schedules || []; periods = s.periods || []; kits = s.kits || []; kitItems = s.kitItems || []; venues = s.venues || []; halls = s.halls || []; shiftTypes = s.shiftTypes || []; staffDays = s.staffDays || [];
   EV.missing = !!s.flags?.ev; EV.crewMissing = !!s.flags?.cr; EV.schedMissing = !!s.flags?.sc; KIT.missing = !!s.flags?.kit;
   OFF.snapAt = s.t;
 }
@@ -2090,6 +2106,10 @@ async function loadAll(){
   { // площадки и залы (11_venues.sql); если файл не запускали — просто пусто
     const [vn, vh] = await Promise.all([sb.from("venues").select("*").order("name"), sb.from("venue_halls").select("*").order("name")]);
     VN.missing = !!(vn.error || vh.error); venues = vn.data || []; halls = vh.data || [];
+  }
+  { // смены по дням из приложения «Смены» (12_shifts.sql)
+    const [st, sd] = await Promise.all([sb.from("shift_types").select("*").order("sort"), sb.from("staff_days").select("*").gte("day", addDays(todayKey(), -60))]);
+    shiftTypes = st.data || []; staffDays = sd.data || [];
   }
   // локальные отложенные изменения поверх свежих данных
   OFF.q.forEach(x => { const arr = { items, event_items:lines, events }[x.table]; const r = arr && arr.find(y => y.id === x.id); if(r) Object.assign(r, x.patch); });
