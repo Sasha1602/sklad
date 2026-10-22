@@ -674,3 +674,15 @@ table.av{border-collapse:collapse;font-size:12.5px;width:100%;font-variant-numer
 .vnhalladd{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
 .vnhalladd .field{min-width:140px}
 .venueinfo{white-space:pre-line}
+.osmbar{display:flex;gap:8px;margin:0 0 10px}
+.osmbox{border:1px solid var(--line);border-radius:var(--r);padding:10px;margin-bottom:12px;background:var(--surface-2)}
+.osmhead{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+.osmhead .field{width:auto;min-width:120px}
+.osmlist{max-height:min(45vh,420px);overflow:auto;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.osmrow{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);font-size:14px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--fg)}
+.osmrow:last-child{border-bottom:0}
+.osmrow small{display:block;color:var(--muted);font-size:12.5px}
+.osmrow.have{opacity:.55;cursor:default}
+.osmrow input{width:18px;height:18px}
+.osmbox .actions{align-items:center;flex-wrap:wrap}
+.osmbox .hint{flex-basis:100%;margin:6px 0 0}

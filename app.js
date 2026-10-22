@@ -842,7 +842,8 @@ function openEvForm(e, date){
   $("evFormTitle").textContent = e ? "Изменить мероприятие" : "Новое мероприятие";
   const d = e || { title:"", date_from:date || todayKey(), date_to:date || todayKey(), venue:"", client:"", responsible:me.id, note:"" };
   ["title","date_from","date_to","venue","client","note"].forEach(f => $("v_" + f).value = d[f] ?? "");
-  $("venueList").innerHTML = venues.map(v => `<option value="${esc(v.name)}">${v.address ? esc(v.address) : ""}</option>`).join("");
+  venueDatalist();
+  if(can("manager") && !VN.missing && OSM.city && !osmCached(OSM.city)) osmFetch(OSM.city).then(venueDatalist).catch(() => {}); // подсказки из интернета
   const ve = e && e.venue_id ? venueById(e.venue_id) : null;
   if(ve) $("v_venue").value = ve.name;
   venueFormSync(e ? e.hall_id : null);
@@ -861,7 +862,8 @@ $("evForm").addEventListener("submit", async ev => {
   if(!VN.missing){
     let v = venueByName(d.venue);
     if(!v && d.venue && can("manager")){
-      const r = await sb.from("venues").insert({ name:d.venue }).select().single();
+      const o = osmByName(d.venue);
+      const r = await sb.from("venues").insert(o ? osmRow(o) : { name:d.venue }).select().single();
       if(!r.error && r.data){ v = r.data; if(!venueById(v.id)) venues.push(v); }
     }
     const h = v && $("v_hall").value ? halls.find(x => x.id === +$("v_hall").value) : null;
@@ -2333,7 +2335,10 @@ function venueFormSync(hallId){
   $("v_hallWrap").hidden = !hs.length;
   $("v_hall").innerHTML = `<option value="">— весь объект / не важно —</option>` + hs.map(h => `<option value="${h.id}">${esc(h.name)}</option>`).join("");
   if(hallId && hs.some(h => h.id === hallId)) $("v_hall").value = String(hallId);
-  const info = v ? [v.address, v.contact, v.note].filter(Boolean).join(" · ") : ($("v_venue").value.trim() && !VN.missing && can("manager") ? "Новая площадка — добавится в справочник при сохранении." : "");
+  const o = !v && osmByName($("v_venue").value);
+  const info = v ? [v.address, v.contact, v.note].filter(Boolean).join(" · ")
+    : o ? `Из интернета: ${[o.type, o.address, o.phone].filter(Boolean).join(" · ")} — добавится в справочник при сохранении.`
+    : ($("v_venue").value.trim() && !VN.missing && can("manager") ? "Новая площадка — добавится в справочник при сохранении." : "");
   $("v_venueInfo").textContent = info; $("v_venueInfo").hidden = !info;
 }
 $("v_venue").addEventListener("input", () => venueFormSync(null));
@@ -2345,12 +2350,14 @@ $("v_hall").addEventListener("change", () => {
 // Справочник площадок
 function openVenues(){
   if(VN.missing){ toast("Площадки ещё не подключены: выполните 11_venues.sql в Supabase"); return; }
-  VN.edit = null; $("vnQ").value = ""; renderVenues(); $("vnScrim").hidden = false;
+  VN.edit = null; $("vnQ").value = ""; $("osmCity").value = OSM.city || ""; renderVenues(); $("vnScrim").hidden = false;
+  if(can("manager") && OSM.city && osmCached(OSM.city)){ OSM.list = osmCached(OSM.city); renderOsm(); }
 }
 function renderVenues(){
   const M = can("manager"), editing = VN.edit !== null;
   $("vnForm").hidden = !editing; $("vnList").hidden = editing; document.querySelector(".vnbar").hidden = editing; $("vnClose").hidden = editing;
   $("vnNew").hidden = !M;
+  $("osmBar").hidden = !M || editing; if(editing || !M) $("osmBox").hidden = true;
   if(editing){ renderVenueHalls(); return; }
   const q = $("vnQ").value.trim().toLowerCase();
   const list = venues.filter(v => !q || [v.name, v.address, v.note].join(" ").toLowerCase().includes(q)).sort((a, b) => a.name.localeCompare(b.name, "ru"));
@@ -2430,6 +2437,116 @@ $("vnDel").onclick = async () => {
   toast("Площадка удалена (мероприятия остались)"); VN.edit = null; renderVenues();
 };
 $("vnScrim").addEventListener("mousedown", e => { if(e.target === $("vnScrim")) $("vnScrim").hidden = true; });
+
+// ---------- площадки из интернета (OpenStreetMap) ----------
+// Город → его границы (Nominatim) → рестораны, банкетные залы, кафе, клубы в городе и отели, базы отдыха
+// в 30 км вокруг (Overpass). Без ключей и регистрации. Результат хранится на устройстве 7 дней.
+const OSM = { city:lsGet("sklad.city", "Иваново"), list:[], sel:new Set(), loading:false };
+const OSM_TYPES = { restaurant:"Ресторан", cafe:"Кафе", bar:"Бар", pub:"Паб", nightclub:"Клуб", events_venue:"Банкетный зал", banquet_hall:"Банкетный зал",
+  conference_centre:"Конференц-зал", community_centre:"ДК / центр", theatre:"Театр", arts_centre:"Арт-центр", hotel:"Отель", motel:"Мотель",
+  guest_house:"Гостевой дом", chalet:"База отдыха", camp_site:"База отдыха", resort:"База отдыха" };
+const OVERPASS = ["https://overpass-api.de/api/interpreter", "https://maps.mail.ru/osm/tools/overpass/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
+const osmKey = c => "sklad.osm." + String(c).trim().toLowerCase();
+function osmCached(city){ const c = lsGet(osmKey(city), null); return c && Date.now() - c.t < 7 * 864e5 ? c.list : null; }
+const osmByName = n => { const k = String(n || "").trim().toLowerCase(); return k ? (osmCached(OSM.city) || []).find(o => o.name.toLowerCase() === k) : null; };
+const osmRow = o => ({ name:o.name, address:o.address || null, contact:o.phone || null, note:[o.type, o.site].filter(Boolean).join(" · ") || null });
+
+async function fetchT(url, opts, ms){
+  const ac = new AbortController(), t = setTimeout(() => ac.abort(), ms);
+  try { return await fetch(url, { ...opts, signal:ac.signal }); } finally { clearTimeout(t); }
+}
+async function osmGeocode(city){
+  const r = await fetchT("https://nominatim.openstreetmap.org/search?format=json&limit=5&accept-language=ru&q=" + encodeURIComponent(city), {}, 15000);
+  if(!r.ok) throw new Error("Поиск города не ответил (" + r.status + ")");
+  const js = await r.json();
+  const pick = js.find(x => x.osm_type === "relation" && /city|town|village|administrative|municipality/.test((x.addresstype || "") + " " + (x.type || ""))) || js[0];
+  if(!pick) throw new Error("Город «" + city + "» не найден");
+  return { lat:+pick.lat, lon:+pick.lon, area:pick.osm_type === "relation" ? 3600000000 + +pick.osm_id : null, name:String(pick.display_name || city).split(",")[0] };
+}
+function osmParse(js, cityName){
+  const seen = new Set(), out = [];
+  (js.elements || []).forEach(el => {
+    const t = el.tags || {}, name = (t.name || "").trim(); if(!name) return;
+    const kind = t.amenity || t.tourism || t.leisure || t.building || "";
+    const street = [t["addr:street"], t["addr:housenumber"]].filter(Boolean).join(", ");
+    const address = t["addr:full"] || (street ? [t["addr:city"] || cityName, street].filter(Boolean).join(", ") : null);
+    const key = name.toLowerCase() + "|" + street.toLowerCase(); if(seen.has(key)) return; seen.add(key);
+    out.push({ id:el.type[0] + el.id, name, type:OSM_TYPES[kind] || "Заведение", address, phone:t.phone || t["contact:phone"] || null, site:t.website || t["contact:website"] || null });
+  });
+  return out.sort((a, b) => a.name.localeCompare(b.name, "ru"));
+}
+async function osmFetch(city){
+  const g = await osmGeocode(city);
+  const IN = g.area ? `(area:${g.area})` : `(around:15000,${g.lat},${g.lon})`, AROUND = `(around:30000,${g.lat},${g.lon})`;
+  const q = `[out:json][timeout:60];(
+    nwr["amenity"~"^(restaurant|events_venue|banquet_hall|cafe|bar|pub|nightclub|conference_centre|community_centre|theatre|arts_centre)$"]["name"]${IN};
+    nwr["building"="banquet_hall"]["name"]${IN};
+    nwr["tourism"~"^(hotel|motel|guest_house|chalet|camp_site)$"]["name"]${AROUND};
+    nwr["leisure"="resort"]["name"]${AROUND};
+  );out center tags;`;
+  let last;
+  for(const url of OVERPASS){
+    try {
+      const r = await fetchT(url, { method:"POST", headers:{ "Content-Type":"application/x-www-form-urlencoded" }, body:"data=" + encodeURIComponent(q) }, 70000);
+      if(!r.ok){ last = new Error("Сервер карт ответил " + r.status); continue; }
+      const list = osmParse(await r.json(), g.name);
+      lsSet(osmKey(city), { t:Date.now(), list });
+      return list;
+    } catch(ex){ last = ex; }
+  }
+  throw new Error(last && last.name === "AbortError" ? "Сервер карт не ответил вовремя — попробуйте ещё раз" : "Не удалось получить данные карт: " + (last ? last.message : "нет связи"));
+}
+function venueDatalist(){
+  const have = new Set(venues.map(v => v.name.toLowerCase())), haveAddr = new Set(venues.map(v => (v.address || "").toLowerCase()).filter(Boolean));
+  const net = (osmCached(OSM.city) || []).filter(o => !have.has(o.name.toLowerCase()) && !(o.address && haveAddr.has(o.address.toLowerCase())));
+  $("venueList").innerHTML = venues.map(v => `<option value="${esc(v.name)}">${v.address ? esc(v.address) : ""}</option>`).join("")
+    + net.map(o => `<option value="${esc(o.name)}">${esc([o.type, o.address].filter(Boolean).join(" · "))} · из интернета</option>`).join("");
+}
+function renderOsm(){
+  const list = OSM.list || [];
+  $("osmBox").hidden = !list.length && !OSM.loading;
+  if(OSM.loading){ $("osmTitle").textContent = "Ищу заведения…"; $("osmList").innerHTML = `<div class="empty" style="border:0">Загружаю данные карт — до минуты.</div>`; return; }
+  const types = [...new Set(list.map(o => o.type))].sort((a, b) => a.localeCompare(b, "ru"));
+  const cur = $("osmType").value; opts($("osmType"), types, true); $("osmType").value = types.includes(cur) ? cur : "";
+  const t = $("osmType").value, q = $("osmQ").value.trim().toLowerCase();
+  const shown = list.filter(o => (!t || o.type === t) && (!q || [o.name, o.address, o.type].join(" ").toLowerCase().includes(q)));
+  $("osmTitle").textContent = `${OSM.city}: найдено ${list.length}`;
+  $("osmList").innerHTML = shown.length ? shown.map(o => {
+    const have = !!venueByName(o.name);
+    return `<label class="osmrow${have ? " have" : ""}"><input type="checkbox" data-osm="${o.id}"${OSM.sel.has(o.id) ? " checked" : ""}${have ? " disabled" : ""}>
+      <span><b>${esc(o.name)}</b><small>${esc([o.type, o.address, o.phone].filter(Boolean).join(" · "))}</small></span><small>${have ? "уже есть" : ""}</small></label>`;
+  }).join("") : `<div class="empty" style="border:0">Ничего не найдено.</div>`;
+  $("osmAdd").disabled = !OSM.sel.size; $("osmAdd").textContent = OSM.sel.size ? `Добавить выбранные (${OSM.sel.size})` : "Добавить выбранные";
+}
+async function osmLoad(){
+  const city = $("osmCity").value.trim(); if(!city){ toast("Впишите город"); return; }
+  OSM.city = city; lsSet("sklad.city", city); OSM.sel = new Set();
+  const c = osmCached(city); if(c){ OSM.list = c; renderOsm(); return; }
+  OSM.loading = true; OSM.list = []; renderOsm(); $("osmLoad").disabled = true;
+  try { OSM.list = await osmFetch(city); if(!OSM.list.length) toast("В открытых картах по этому городу ничего не нашлось"); }
+  catch(ex){ toast(ex.message); }
+  finally { OSM.loading = false; $("osmLoad").disabled = false; renderOsm(); }
+}
+$("osmLoad").onclick = osmLoad;
+$("osmCity").addEventListener("keydown", e => { if(e.key === "Enter"){ e.preventDefault(); osmLoad(); } });
+$("osmCity").addEventListener("change", osmLoad);
+["osmType","osmQ"].forEach(id => $(id).addEventListener("input", renderOsm));
+$("osmList").addEventListener("change", e => { const id = e.target.dataset.osm; if(!id) return; e.target.checked ? OSM.sel.add(id) : OSM.sel.delete(id); renderOsm(); });
+$("osmHide").onclick = () => { $("osmBox").hidden = true; OSM.list = []; };
+$("osmAdd").onclick = async () => {
+  const pick = OSM.list.filter(o => OSM.sel.has(o.id) && !venueByName(o.name));
+  if(!pick.length) return;
+  // Одинаковые названия (сетевые кафе) — различаем адресом.
+  const names = new Map(); pick.forEach(o => names.set(o.name.toLowerCase(), (names.get(o.name.toLowerCase()) || 0) + 1));
+  const rows = pick.map(o => { const r = osmRow(o); if(names.get(o.name.toLowerCase()) > 1 && o.address) r.name = `${o.name} (${o.address})`; return r; })
+    .filter((r, i, a) => a.findIndex(x => x.name.toLowerCase() === r.name.toLowerCase()) === i && !venueByName(r.name));
+  $("osmAdd").disabled = true;
+  const { data, error } = await sb.from("venues").insert(rows).select();
+  if(error){ toast(errText(error)); $("osmAdd").disabled = false; return; }
+  (data || []).forEach(v => { if(!venueById(v.id)) venues.push(v); });
+  OSM.sel = new Set(); toast(`Добавлено площадок: ${(data || []).length}. Залы можно дописать в карточке площадки.`);
+  renderVenues(); renderOsm();
+};
 
 boot();
 })();

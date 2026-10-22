@@ -14,7 +14,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&family=Unbounded:wght@600&display=swap">
-<link rel="stylesheet" href="style.css?v=2026-10-22-venues">
+<link rel="stylesheet" href="style.css?v=2026-10-22-osm">
 </head>
 <body>
 
@@ -292,6 +292,16 @@
     <h3 class="h2">Площадки</h3>
     <p class="hint">Площадки и залы подсказываются при создании мероприятия. Адрес и заметки (въезд, питание, точки подвеса) видны в карточке мероприятия.</p>
     <div class="vnbar"><input type="search" id="vnQ" class="field grow" placeholder="Поиск"><button type="button" class="btn primary" id="vnNew">+ Площадка</button></div>
+    <div class="osmbar" id="osmBar">
+      <input id="osmCity" class="field grow" placeholder="Город, например Иваново" autocomplete="address-level2">
+      <button type="button" class="btn" id="osmLoad">Найти в интернете</button>
+    </div>
+    <div class="osmbox" id="osmBox" hidden>
+      <div class="osmhead"><b id="osmTitle"></b><span class="sp"></span><select id="osmType" class="field"><option value="">Все типы</option></select><input type="search" id="osmQ" class="field" placeholder="Фильтр"></div>
+      <div class="osmlist" id="osmList"></div>
+      <div class="actions"><button type="button" class="btn primary" id="osmAdd" disabled>Добавить выбранные</button><button type="button" class="btn" id="osmHide">Скрыть</button>
+        <span class="hint">Данные OpenStreetMap: названия, адреса, телефоны. Залы внутри заведений в открытых данных не публикуются — их добавляют вручную.</span></div>
+    </div>
     <div class="vnlist" id="vnList"></div>
     <form id="vnForm" class="vnform" novalidate hidden>
       <div class="grid">
