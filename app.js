@@ -2149,8 +2149,9 @@ async function openCal(e){
   const apple = isIOS() || /Macintosh/.test(navigator.userAgent);
   const sub = q => apple ? webcal(calFeed(L, q)) : "https://calendar.google.com/calendar/r?cid=" + encodeURIComponent(webcal(calFeed(L, q)));
   $("calSubMine").href = sub(""); $("calSubAll").href = sub("&all=1"); $("calSubAll").hidden = !can("manager");
+  $("calSubShifts").href = sub("&t=shifts"); $("calSubShifts").hidden = !scheduleOf(me.id);
   $("calSubHint").textContent = apple
-    ? "iPhone спросит «Подписаться на календарь?» — нажмите «Подписаться». Чтобы приходили напоминания: Настройки → Календарь → Учётные записи → Подписные календари → «Склад» → выключите «Удалить напоминания»."
+    ? "iPhone спросит «Подписаться на календарь?» — нажмите «Подписаться». Цвет можно сменить там же или потом: Календарь → «Календари» → ⓘ у календаря. Чтобы приходили напоминания о выездах: Настройки → Календарь → Учётные записи → Подписные календари → «Склад — мои выезды» → выключите «Удалить напоминания»."
     : "Откроется Google Календарь — нажмите «Добавить». На Android календарь Google покажет эти события сам.";
   $("calSub").hidden = false;
 }
@@ -2165,6 +2166,7 @@ $("calIcs").onclick = async () => {
 $("calGoogle").addEventListener("click", () => setTimeout(() => $("calScrim").hidden = true, 100));
 $("calSubMine").addEventListener("click", () => setTimeout(() => $("calScrim").hidden = true, 300));
 $("calSubAll").addEventListener("click", () => setTimeout(() => $("calScrim").hidden = true, 300));
+$("calSubShifts").addEventListener("click", () => setTimeout(() => $("calScrim").hidden = true, 300));
 $("calCopy").onclick = async () => {
   const L = CAL.link; if(!L) return;
   try { await navigator.clipboard.writeText(calFeed(L, "")); toast("Ссылка скопирована — вставьте её в календаре как «Подписку»"); }
