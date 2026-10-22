@@ -14,7 +14,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&family=Unbounded:wght@600&display=swap">
-<link rel="stylesheet" href="style.css?v=2026-10-22-cal">
+<link rel="stylesheet" href="style.css?v=2026-10-22-venues">
 </head>
 <body>
 
@@ -174,6 +174,7 @@
           <label class="check"><input type="checkbox" id="evMine"> только мои</label>
           <span class="sp"></span>
           <button class="btn" type="button" id="quickBtn" hidden><svg class="ti" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg> Быстрый прокат</button>
+          <button class="btn" type="button" id="venuesBtn" hidden>Площадки</button>
           <button class="btn primary" type="button" id="evAddBtn">+ Мероприятие</button>
         </div>
         <div id="calWrap">
@@ -261,6 +262,7 @@
   </form>
 </div>
 <!-- ============ Мероприятие: создать / изменить ============ -->
+<datalist id="venueList"></datalist>
 <div class="scrim" id="evScrim" hidden>
   <form class="sheet" id="evForm" novalidate>
     <h3 class="h2" id="evFormTitle">Новое мероприятие</h3>
@@ -268,8 +270,10 @@
       <label class="full">Название<input id="v_title" class="field" placeholder="Свадьба Ивановых" required></label>
       <label>Начало<input id="v_date_from" class="field" type="date" required></label>
       <label>Окончание<input id="v_date_to" class="field" type="date" required></label>
-      <label>Площадка<input id="v_venue" class="field" placeholder="Ресторан, адрес"></label>
+      <label>Площадка<input id="v_venue" class="field" placeholder="Начните вводить — подскажем" list="venueList" autocomplete="off"></label>
+      <label id="v_hallWrap" hidden>Зал<select id="v_hall" class="field"></select></label>
       <label>Заказчик<input id="v_client" class="field" placeholder="Имя, телефон"></label>
+      <p class="hint full" id="v_venueInfo" hidden></p>
       <label class="full">Ответственный<select id="v_responsible" class="field"></select></label>
       <label class="full">Примечание<textarea id="v_note" class="field" placeholder="Монтаж с 10:00, демонтаж после 23:00…"></textarea></label>
     </div>
@@ -280,6 +284,34 @@
       <button type="button" class="btn" data-close="evScrim">Отмена</button>
     </div>
   </form>
+</div>
+
+<!-- ============ Площадки и залы ============ -->
+<div class="scrim" id="vnScrim" hidden>
+  <div class="sheet">
+    <h3 class="h2">Площадки</h3>
+    <p class="hint">Площадки и залы подсказываются при создании мероприятия. Адрес и заметки (въезд, питание, точки подвеса) видны в карточке мероприятия.</p>
+    <div class="vnbar"><input type="search" id="vnQ" class="field grow" placeholder="Поиск"><button type="button" class="btn primary" id="vnNew">+ Площадка</button></div>
+    <div class="vnlist" id="vnList"></div>
+    <form id="vnForm" class="vnform" novalidate hidden>
+      <div class="grid">
+        <label class="full">Название<input id="vn_name" class="field" placeholder="Усадьба «Берёзки»" required></label>
+        <label class="full">Адрес<input id="vn_addr" class="field" placeholder="Город, улица, дом"></label>
+        <label class="full">Контакт на площадке<input id="vn_contact" class="field" placeholder="Администратор, телефон"></label>
+        <label class="full">Заметки<textarea id="vn_note" class="field" placeholder="Въезд с торца, розетки 32А у сцены, тишина после 23:00…"></textarea></label>
+      </div>
+      <h4 class="vnh">Залы</h4>
+      <div id="vnHalls"></div>
+      <div class="vnhalladd"><input id="vn_hall" class="field grow" placeholder="Название зала"><input id="vn_hallNote" class="field grow" placeholder="Заметка: размеры, подвес…"><button type="button" class="btn" id="vnHallAdd">+ Зал</button></div>
+      <div class="msg" id="vnErr" hidden></div>
+      <div class="actions">
+        <button type="submit" class="btn primary" id="vnSave">Сохранить</button>
+        <button type="button" class="btn" id="vnBack">К списку</button>
+        <button type="button" class="btn danger" id="vnDel" hidden>Удалить</button>
+      </div>
+    </form>
+    <div class="actions" id="vnClose"><button type="button" class="btn" data-close="vnScrim">Закрыть</button></div>
+  </div>
 </div>
 
 <!-- ============ График сотрудника ============ -->

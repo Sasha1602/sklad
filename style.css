@@ -658,3 +658,19 @@ table.av{border-collapse:collapse;font-size:12.5px;width:100%;font-variant-numer
 .calsub{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
 .calsub .calopts{margin-top:8px}
 .calopts a.btn:not(.primary){color:var(--fg)}
+
+/* =================== Площадки =================== */
+.vnbar{display:flex;gap:8px;margin:12px 0 10px}
+.vnlist{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;max-height:min(55vh,520px);overflow-y:auto}
+.vnrow{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--line);background:var(--surface);text-align:left;font:inherit;color:var(--fg);border-left:0;border-right:0;border-top:0;cursor:pointer;width:100%}
+.vnrow:last-child{border-bottom:0}
+.vnrow:hover{background:var(--surface-2)}
+.vnrow small{display:block;color:var(--muted);font-size:12.5px;margin-top:2px}
+.vnform{margin-top:6px}
+.vnh{margin:14px 0 6px;font-size:14px}
+.vnhall{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px dashed var(--line);font-size:14px}
+.vnhall span{flex:1;min-width:0}
+.vnhall small{color:var(--muted)}
+.vnhalladd{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.vnhalladd .field{min-width:140px}
+.venueinfo{white-space:pre-line}

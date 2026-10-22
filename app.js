@@ -54,7 +54,7 @@ if(window.SKLAD_LIB_FAILED || !window.supabase){
 }
 const sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_KEY, { auth:{ persistSession:true, autoRefreshToken:true, detectSessionInUrl:true } });
 
-let me = null, items = [], profiles = {}, logRows = [], events = [], lines = [], crew = [], schedules = [], periods = [], kits = [], kitItems = [], channel = null, started = false, recovering = false;
+let me = null, items = [], profiles = {}, logRows = [], events = [], lines = [], crew = [], schedules = [], periods = [], kits = [], kitItems = [], venues = [], halls = [], channel = null, started = false, recovering = false;
 
 opts($("fCat"), CATS, true); opts($("fState"), Object.keys(STATES), true); opts($("fStatus"), Object.keys(STATUSES), true);
 opts($("e_category"), CATS); opts($("e_state"), Object.keys(STATES)); opts($("e_status"), Object.keys(STATUSES)); opts($("e_unit"), UNITS);
@@ -191,6 +191,12 @@ function subscribe(){
     })
     .on("postgres_changes", { event:"*", schema:"public", table:"event_crew" }, p => {
       crew = upsertRow(crew, p); renderEvents(); renderUsers();
+    })
+    .on("postgres_changes", { event:"*", schema:"public", table:"venues" }, p => {
+      venues = upsertRow(venues, p); renderEvents(); if(!$("vnScrim").hidden) renderVenues();
+    })
+    .on("postgres_changes", { event:"*", schema:"public", table:"venue_halls" }, p => {
+      halls = upsertRow(halls, p); renderEvents(); if(!$("vnScrim").hidden) renderVenues();
     })
     .on("postgres_changes", { event:"INSERT", schema:"public", table:"item_log" }, p => {
       logRows.unshift(p.new); logRows = logRows.slice(0, 300); renderLog();
@@ -335,7 +341,7 @@ $("scrim").addEventListener("mousedown", e => { if(e.target === $("scrim")) clos
 document.addEventListener("keydown", e => {
   if(e.key !== "Escape") return;
   if(!$("scrim").hidden) closeEditor();
-  ["evScrim","pkScrim","prScrim","crScrim","scScrim","kitScrim","ekScrim","qkScrim","bdScrim","calScrim"].forEach(id => $(id).hidden = true);
+  ["evScrim","pkScrim","prScrim","crScrim","scScrim","kitScrim","ekScrim","qkScrim","bdScrim","calScrim","vnScrim"].forEach(id => $(id).hidden = true);
 });
 $("form").addEventListener("submit", async e => {
   e.preventDefault();
@@ -527,6 +533,7 @@ function renderEvents(){
   $("outCount").textContent = outN; $("outCount").hidden = !outN;
   $("outCount").title = "На выезде: " + outN;
   $("evAddBtn").hidden = !can("manager") || EV.missing;
+  $("venuesBtn").hidden = !can("viewer") || EV.missing;
   $("quickBtn").hidden = !can("worker") || EV.missing;
   const open = EV.open ? evById(EV.open) : null;
   if(EV.open && !open && !EV.missing){ EV.open = null; if(!$("tab-events").hidden) history.replaceState(null, "", "#events"); }
@@ -709,13 +716,14 @@ function renderEventDetail(e){
         <h2 class="evh">${esc(e.title)}</h2>
         <div class="evfacts">
           <span><small>Даты</small>${esc(fmtRange(e))}</span>
-          ${e.venue ? `<span><small>Площадка</small>${esc(e.venue)}</span>` : ""}
+          ${e.venue ? `<span><small>Площадка</small>${esc(e.venue)}${venueAddrHtml(e)}</span>` : ""}
           ${e.client ? `<span><small>Заказчик</small>${esc(e.client)}</span>` : ""}
           ${resp ? `<span><small>Ответственный</small>${esc(resp)}</span>` : ""}
           <span><small>Оборудование</small>${ls.length} поз. · ${units} ед.</span>
           ${kitsInEvent(e).length ? `<span><small>Комплекты</small>${kitsInEvent(e).map(k => esc(k.name) + (isActive(e) && kitIncomplete(k.id).length ? ` <span class="chip c-bad xs">неполный</span>` : "")).join(", ")}</span>` : ""}
         </div>
         ${e.note ? `<p class="evnote">${esc(e.note)}</p>` : ""}
+        ${venueNoteHtml(e)}
       </div>
       <span class="chip lg ${evSt(e).c}">${evSt(e).t}</span>
     </div>
@@ -834,6 +842,10 @@ function openEvForm(e, date){
   $("evFormTitle").textContent = e ? "Изменить мероприятие" : "Новое мероприятие";
   const d = e || { title:"", date_from:date || todayKey(), date_to:date || todayKey(), venue:"", client:"", responsible:me.id, note:"" };
   ["title","date_from","date_to","venue","client","note"].forEach(f => $("v_" + f).value = d[f] ?? "");
+  $("venueList").innerHTML = venues.map(v => `<option value="${esc(v.name)}">${v.address ? esc(v.address) : ""}</option>`).join("");
+  const ve = e && e.venue_id ? venueById(e.venue_id) : null;
+  if(ve) $("v_venue").value = ve.name;
+  venueFormSync(e ? e.hall_id : null);
   const staff = Object.values(profiles).filter(p => LV[p.role] >= LV.worker).sort((a, b) => (a.full_name || "").localeCompare(b.full_name || "", "ru"));
   $("v_responsible").innerHTML = `<option value="">— не назначен —</option>` + staff.map(p => `<option value="${p.id}">${esc(p.full_name || p.email)} · ${ROLES[p.role]}</option>`).join("");
   $("v_responsible").value = d.responsible || "";
@@ -845,6 +857,17 @@ $("evForm").addEventListener("submit", async ev => {
   ev.preventDefault();
   const d = { title:$("v_title").value.trim(), date_from:$("v_date_from").value, date_to:$("v_date_to").value || $("v_date_from").value,
     venue:$("v_venue").value.trim() || null, client:$("v_client").value.trim() || null, responsible:$("v_responsible").value || null, note:$("v_note").value.trim() || null };
+  // Площадка из справочника (или новая — менеджер добавит её туда автоматически) и зал.
+  if(!VN.missing){
+    let v = venueByName(d.venue);
+    if(!v && d.venue && can("manager")){
+      const r = await sb.from("venues").insert({ name:d.venue }).select().single();
+      if(!r.error && r.data){ v = r.data; if(!venueById(v.id)) venues.push(v); }
+    }
+    const h = v && $("v_hall").value ? halls.find(x => x.id === +$("v_hall").value) : null;
+    d.venue_id = v ? v.id : null; d.hall_id = h ? h.id : null;
+    if(v) d.venue = v.name + (h ? " · " + h.name : "");
+  }
   const err = t => { $("evFormErr").textContent = t; $("evFormErr").hidden = false; };
   if(!d.title) return err("Укажите название.");
   if(!d.date_from) return err("Укажите дату начала.");
@@ -1970,7 +1993,7 @@ const OFF = { offline:false, snapAt:null, q:lsGet("sklad.outbox", []), flushing:
 const isNetErr = e => !!e && /Failed to fetch|NetworkError|Load failed|network|fetch failed|Network request failed|ERR_INTERNET|timed? ?out/i.test(String(e.message || e));
 function saveSnap(){
   if(!me) return;
-  lsSet("sklad.snap", { t:Date.now(), uid:me.id, me, items, profiles, logRows:logRows.slice(0, 100), events, lines, crew, schedules, periods, kits, kitItems,
+  lsSet("sklad.snap", { t:Date.now(), uid:me.id, me, items, profiles, logRows:logRows.slice(0, 100), events, lines, crew, schedules, periods, kits, kitItems, venues, halls,
     flags:{ ev:EV.missing, cr:EV.crewMissing, sc:EV.schedMissing, kit:KIT.missing } });
 }
 function loadSnap(uid){
@@ -1978,7 +2001,7 @@ function loadSnap(uid){
 }
 function applySnap(s){
   items = s.items || []; profiles = s.profiles || {}; logRows = s.logRows || []; events = s.events || []; lines = s.lines || [];
-  crew = s.crew || []; schedules = s.schedules || []; periods = s.periods || []; kits = s.kits || []; kitItems = s.kitItems || [];
+  crew = s.crew || []; schedules = s.schedules || []; periods = s.periods || []; kits = s.kits || []; kitItems = s.kitItems || []; venues = s.venues || []; halls = s.halls || [];
   EV.missing = !!s.flags?.ev; EV.crewMissing = !!s.flags?.cr; EV.schedMissing = !!s.flags?.sc; KIT.missing = !!s.flags?.kit;
   OFF.snapAt = s.t;
 }
@@ -2062,6 +2085,10 @@ async function loadAll(){
   if(cr.error){ EV.crewMissing = true; } else { EV.crewMissing = false; crew = cr.data || []; }
   if(ss.error || sp.error){ EV.schedMissing = true; } else { EV.schedMissing = false; schedules = ss.data || []; periods = sp.data || []; }
   if(kt.error || ki.error){ KIT.missing = true; } else { KIT.missing = false; kits = kt.data || []; kitItems = ki.data || []; }
+  { // площадки и залы (11_venues.sql); если файл не запускали — просто пусто
+    const [vn, vh] = await Promise.all([sb.from("venues").select("*").order("name"), sb.from("venue_halls").select("*").order("name")]);
+    VN.missing = !!(vn.error || vh.error); venues = vn.data || []; halls = vh.data || [];
+  }
   // локальные отложенные изменения поверх свежих данных
   OFF.q.forEach(x => { const arr = { items, event_items:lines, events }[x.table]; const r = arr && arr.find(y => y.id === x.id); if(r) Object.assign(r, x.patch); });
   renderStock(); renderLog(); renderUsers(); renderEvents(); renderKits(); renderToday();
@@ -2280,6 +2307,129 @@ function logEventHtml(r, name){
   return `<div class="ev"><time datetime="${esc(r.created_at)}" title="${t.toLocaleString("ru-RU")}">${t.toLocaleDateString("ru-RU", { day:"2-digit", month:"2-digit" })} ${t.toLocaleTimeString("ru-RU", { hour:"2-digit", minute:"2-digit" })}</time>
     <div class="what"><span class="who">${esc(name(r.user_id))}</span> ${what}</div></div>`;
 }
+
+// =====================================================================
+// ---------- площадки и залы ----------
+// =====================================================================
+const VN = { missing:false, edit:null, halls:[] };
+const venueById = id => venues.find(v => v.id === id);
+const venueByName = n => { const k = String(n || "").trim().toLowerCase(); return k ? venues.find(v => v.name.trim().toLowerCase() === k) : null; };
+const hallsOf = vid => halls.filter(h => h.venue_id === vid).sort((a, b) => a.name.localeCompare(b.name, "ru"));
+const mapsUrl = a => "https://yandex.ru/maps/?text=" + encodeURIComponent(a);
+
+function venueAddrHtml(e){
+  const v = e.venue_id && venueById(e.venue_id); if(!v || !v.address) return "";
+  return `<br><a href="${mapsUrl(v.address)}" target="_blank" rel="noopener" class="muted">${esc(v.address)}</a>`;
+}
+function venueNoteHtml(e){
+  const v = e.venue_id && venueById(e.venue_id), h = e.hall_id && halls.find(x => x.id === e.hall_id);
+  const parts = [v && v.contact ? "Контакт: " + v.contact : "", v && v.note ? v.note : "", h && h.note ? h.name + ": " + h.note : ""].filter(Boolean);
+  return parts.length ? `<p class="evnote venueinfo">${esc(parts.join("\n"))}</p>` : "";
+}
+
+// В форме мероприятия: выбрали площадку — показать её залы и заметки.
+function venueFormSync(hallId){
+  const v = venueByName($("v_venue").value), hs = v ? hallsOf(v.id) : [];
+  $("v_hallWrap").hidden = !hs.length;
+  $("v_hall").innerHTML = `<option value="">— весь объект / не важно —</option>` + hs.map(h => `<option value="${h.id}">${esc(h.name)}</option>`).join("");
+  if(hallId && hs.some(h => h.id === hallId)) $("v_hall").value = String(hallId);
+  const info = v ? [v.address, v.contact, v.note].filter(Boolean).join(" · ") : ($("v_venue").value.trim() && !VN.missing && can("manager") ? "Новая площадка — добавится в справочник при сохранении." : "");
+  $("v_venueInfo").textContent = info; $("v_venueInfo").hidden = !info;
+}
+$("v_venue").addEventListener("input", () => venueFormSync(null));
+$("v_hall").addEventListener("change", () => {
+  const h = halls.find(x => x.id === +$("v_hall").value);
+  if(h && h.note){ $("v_venueInfo").textContent = h.name + ": " + h.note; $("v_venueInfo").hidden = false; } else venueFormSync(+$("v_hall").value || null);
+});
+
+// Справочник площадок
+function openVenues(){
+  if(VN.missing){ toast("Площадки ещё не подключены: выполните 11_venues.sql в Supabase"); return; }
+  VN.edit = null; $("vnQ").value = ""; renderVenues(); $("vnScrim").hidden = false;
+}
+function renderVenues(){
+  const M = can("manager"), editing = VN.edit !== null;
+  $("vnForm").hidden = !editing; $("vnList").hidden = editing; document.querySelector(".vnbar").hidden = editing; $("vnClose").hidden = editing;
+  $("vnNew").hidden = !M;
+  if(editing){ renderVenueHalls(); return; }
+  const q = $("vnQ").value.trim().toLowerCase();
+  const list = venues.filter(v => !q || [v.name, v.address, v.note].join(" ").toLowerCase().includes(q)).sort((a, b) => a.name.localeCompare(b.name, "ru"));
+  const used = id => events.filter(e => e.venue_id === id).length;
+  $("vnList").innerHTML = list.length ? list.map(v => {
+    const hs = hallsOf(v.id);
+    return `<button type="button" class="vnrow" data-vn="${v.id}"><span><b>${esc(v.name)}</b>
+      <small>${[v.address, hs.length ? "залы: " + hs.map(h => h.name).join(", ") : ""].filter(Boolean).map(esc).join(" · ") || "&nbsp;"}</small></span>
+      <small>${used(v.id)} мероп.</small></button>`;
+  }).join("") : `<div class="empty" style="border:0">${q ? "Ничего не найдено." : "Площадок пока нет — они появятся из мероприятий или добавьте вручную."}</div>`;
+}
+function openVenueForm(v){
+  const M = can("manager");
+  VN.edit = v ? v.id : 0;
+  VN.halls = v ? hallsOf(v.id).map(h => ({ ...h })) : [];
+  $("vn_name").value = v ? v.name : ""; $("vn_addr").value = v ? v.address || "" : "";
+  $("vn_contact").value = v ? v.contact || "" : ""; $("vn_note").value = v ? v.note || "" : "";
+  $("vn_hall").value = ""; $("vn_hallNote").value = "";
+  [...$("vnForm").elements].forEach(el => { if(el.id !== "vnBack") el.disabled = !M; });
+  $("vnSave").hidden = !M; $("vnDel").hidden = !(M && v); $("vnDel").classList.remove("armed"); $("vnDel").textContent = "Удалить";
+  document.querySelector(".vnhalladd").hidden = !M;
+  $("vnErr").hidden = true; renderVenues();
+}
+function renderVenueHalls(){
+  const M = can("manager");
+  $("vnHalls").innerHTML = VN.halls.filter(h => !h._del).length ? VN.halls.map((h, i) => h._del ? "" : `<div class="vnhall"><span><b>${esc(h.name)}</b>${h.note ? ` <small>${esc(h.note)}</small>` : ""}</span>
+    ${M ? `<button type="button" class="edit" data-hdel="${i}" aria-label="Убрать зал">✕</button>` : ""}</div>`).join("") : `<p class="hint">Залов нет — площадка выбирается целиком.</p>`;
+}
+$("venuesBtn").onclick = openVenues;
+$("vnQ").addEventListener("input", renderVenues);
+$("vnNew").onclick = () => openVenueForm(null);
+$("vnBack").onclick = () => { VN.edit = null; renderVenues(); };
+$("vnList").addEventListener("click", e => { const b = e.target.closest("[data-vn]"); if(b) openVenueForm(venueById(+b.dataset.vn)); });
+$("vnHalls").addEventListener("click", e => {
+  const b = e.target.closest("[data-hdel]"); if(!b) return;
+  const h = VN.halls[+b.dataset.hdel]; if(h.id) h._del = true; else VN.halls.splice(+b.dataset.hdel, 1);
+  renderVenueHalls();
+});
+$("vnHallAdd").onclick = () => {
+  const n = $("vn_hall").value.trim(); if(!n) return;
+  if(VN.halls.some(h => !h._del && h.name.toLowerCase() === n.toLowerCase())){ toast("Такой зал уже есть"); return; }
+  VN.halls.push({ name:n, note:$("vn_hallNote").value.trim() || null });
+  $("vn_hall").value = ""; $("vn_hallNote").value = ""; renderVenueHalls(); $("vn_hall").focus();
+};
+$("vn_hall").addEventListener("keydown", e => { if(e.key === "Enter"){ e.preventDefault(); $("vnHallAdd").click(); } });
+$("vnForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const err = t => { $("vnErr").textContent = t; $("vnErr").hidden = false; };
+  const d = { name:$("vn_name").value.trim(), address:$("vn_addr").value.trim() || null, contact:$("vn_contact").value.trim() || null, note:$("vn_note").value.trim() || null };
+  if(!d.name) return err("Укажите название площадки.");
+  const dup = venueByName(d.name); if(dup && dup.id !== VN.edit) return err("Такая площадка уже есть.");
+  $("vnSave").disabled = true;
+  try {
+    let id = VN.edit;
+    if(id){ const r = await sb.from("venues").update(d).eq("id", id); if(r.error) throw r.error; Object.assign(venueById(id), d); }
+    else { const r = await sb.from("venues").insert(d).select().single(); if(r.error) throw r.error; id = r.data.id; if(!venueById(id)) venues.push(r.data); }
+    const del = VN.halls.filter(h => h.id && h._del).map(h => h.id);
+    const ins = VN.halls.filter(h => !h.id && !h._del).map(h => ({ venue_id:id, name:h.name, note:h.note }));
+    if(del.length){ const r = await sb.from("venue_halls").delete().in("id", del); if(r.error) throw r.error; halls = halls.filter(h => !del.includes(h.id)); }
+    if(ins.length){ const r = await sb.from("venue_halls").insert(ins).select(); if(r.error) throw r.error; (r.data || []).forEach(h => { if(!halls.find(x => x.id === h.id)) halls.push(h); }); }
+    // Название площадки поменяли — обновить подпись в её мероприятиях.
+    if(VN.edit){
+      const evs = events.filter(x => x.venue_id === id);
+      for(const ev of evs){ const h = ev.hall_id && halls.find(x => x.id === ev.hall_id); const t = d.name + (h ? " · " + h.name : "");
+        if(ev.venue !== t){ const r = await sb.from("events").update({ venue:t }).eq("id", ev.id); if(!r.error) ev.venue = t; } }
+    }
+    toast("Площадка сохранена"); VN.edit = null; renderVenues(); renderEvents();
+  } catch(ex){ err(/duplicate/i.test(ex.message || "") ? "Такая площадка или зал уже есть." : errText(ex)); }
+  finally { $("vnSave").disabled = false; }
+});
+$("vnDel").onclick = async () => {
+  const b = $("vnDel"), v = venueById(VN.edit); if(!v) return;
+  if(!b.classList.contains("armed")){ b.classList.add("armed"); b.textContent = "Точно удалить?"; return; }
+  const { error } = await sb.from("venues").delete().eq("id", v.id);
+  if(error){ toast(errText(error)); return; }
+  venues = venues.filter(x => x.id !== v.id); halls = halls.filter(h => h.venue_id !== v.id);
+  toast("Площадка удалена (мероприятия остались)"); VN.edit = null; renderVenues();
+};
+$("vnScrim").addEventListener("mousedown", e => { if(e.target === $("vnScrim")) $("vnScrim").hidden = true; });
 
 boot();
 })();
