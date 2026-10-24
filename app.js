@@ -750,9 +750,16 @@ function crewSection(e){
     const busy = isActive(e) ? crewBusy(c, e) : [];
     const iss = isActive(e) && c.user_id && !EV.schedMissing ? personIssues(c.user_id, e.date_from, e.date_to) : [];
     const ph = c.phone || "";
-    return `<div class="crow${busy.length || iss.length ? " bad" : ""}" data-crew="${c.id}">
-      <div class="cwho"><b>${esc(crewName(c))}</b>${c.user_id === me.id ? ` <span class="chip xs c-info">вы</span>` : ""}${c.job ? ` <span class="job">${esc(c.job)}</span>` : ""}
+    const hint = isActive(e) && c.user_id && !EV.schedMissing ? hintsText(c.user_id, e.date_from, e.date_to) : "";
+    const rep = c.reply === "yes" ? ` <span class="chip xs c-ok" title="${esc(c.replied_at ? "ответил(а) " + new Date(c.replied_at).toLocaleString("ru-RU") : "")}">сможет</span>`
+      : c.reply === "no" ? ` <span class="chip xs c-bad">не сможет</span>` : (c.user_id && isActive(e) ? ` <span class="chip xs c-off">ждём ответ</span>` : "");
+    const mine = c.user_id === me.id && isActive(e) && !EV.replyMissing;
+    return `<div class="crow${busy.length || iss.length || c.reply === "no" ? " bad" : ""}" data-crew="${c.id}">
+      <div class="cwho"><b>${esc(crewName(c))}</b>${c.user_id === me.id ? ` <span class="chip xs c-info">вы</span>` : ""}${c.job ? ` <span class="job">${esc(c.job)}</span>` : ""}${EV.replyMissing ? "" : rep}
         ${c.note ? `<div class="sub">${esc(c.note)}</div>` : ""}
+        ${c.reply_note ? `<div class="sub">«${esc(c.reply_note)}»</div>` : ""}
+        ${hint ? `<div class="sub chint">${esc(hint)}</div>` : ""}
+        ${mine ? `<div class="replybar"><button type="button" class="btn sm${c.reply === "yes" ? " primary" : ""}" data-reply="yes">Смогу</button><button type="button" class="btn sm${c.reply === "no" ? " danger" : ""}" data-reply="no">Не смогу</button></div>` : ""}
         ${busy.length ? `<div class="neg cwarn">В эти даты также на ${busy.map(o => `<a href="#ev-${o.id}" data-ev="${o.id}">«${esc(o.title)}»</a>`).join(", ")}</div>` : ""}
         ${iss.length ? `<div class="neg cwarn">${esc(issuesText(iss))}</div>` : ""}</div>
       <div class="cphone">${ph ? `<a href="tel:${esc(ph.replace(/[^+\d]/g, ""))}">${esc(ph)}</a>` : ""}</div>
@@ -770,6 +777,18 @@ $("evDetail").addEventListener("click", async ev => {
   const e = evById(EV.open); if(!e) return;
   const fb = ev.target.closest("[data-found],[data-wo]");
   if(fb){ resolveLoss(e, fb); return; }
+  const rb = ev.target.closest("[data-reply]");
+  if(rb){
+    const yes = rb.dataset.reply === "yes";
+    const note = yes ? null : (prompt("Почему не сможете? (можно оставить пустым)") || null);
+    rb.disabled = true;
+    const { error } = await sb.rpc("crew_reply", { p_event:e.id, p_reply:yes ? "yes" : "no", p_note:note });
+    rb.disabled = false;
+    if(error){ if(/crew_reply|function/i.test(error.message || "")){ EV.replyMissing = true; toast("Ответы на выезды ещё не подключены: нужно выполнить 15_smeny_plus.sql"); } else toast(errText(error)); return; }
+    const c = crew.find(x => x.event_id === e.id && x.user_id === me.id);
+    if(c){ c.reply = yes ? "yes" : "no"; c.reply_note = note; c.replied_at = new Date().toISOString(); }
+    renderEvents(); toast(yes ? "Ответили: смогу" : "Ответили: не смогу — менеджер получит уведомление"); return;
+  }
   const cd = ev.target.closest("[data-crdel]");
   if(cd){
     const id = +cd.dataset.crdel;
@@ -1028,8 +1047,9 @@ function openCrew(e){
   const staff = Object.values(profiles).filter(p => LV[p.role] >= LV.viewer && !taken.has(p.id)).sort((a, b) => (a.full_name || "").localeCompare(b.full_name || "", "ru"));
   $("c_user").innerHTML = staff.length ? staff.map(p => {
     const busy = crewBusy({ user_id:p.id }, e), iss = EV.schedMissing ? [] : personIssues(p.id, e.date_from, e.date_to);
-    const why = busy.length ? "на «" + busy[0].title + "»" : iss.length ? (iss[0].t === "shift" ? "смена " + fmtD(iss[0].k) : "недоступен") : "";
-    return `<option value="${p.id}">${esc(p.full_name || p.email)}${why ? " — " + esc(why) : " — свободен"}</option>`;
+    const sh = iss.find(x => x.t === "shift"), hint = EV.schedMissing ? "" : hintsText(p.id, e.date_from, e.date_to);
+    const why = busy.length ? "на «" + busy[0].title + "»" : iss.some(x => x.t === "busy") ? "недоступен" : sh ? "смена " + fmtD(sh.k) + (sh.st && stTime(sh.st) ? " " + stTime(sh.st) : "") : "";
+    return `<option value="${p.id}">${esc(p.full_name || p.email)}${why ? " — " + esc(why) : hint ? " — свободен, " + esc(hint) : " — свободен"}</option>`;
   }).join("") : `<option value="">Все сотрудники уже в команде</option>`;
   ["c_name","c_phone","c_job","c_note"].forEach(id => $(id).value = "");
   $("crHint").textContent = `«${e.title}», ${fmtRange(e)}`;
@@ -1064,7 +1084,13 @@ const dayDiff = (a, b) => Math.round((dparse(a) - dparse(b)) / dayMs);
 const scheduleOf = uid => schedules.find(x => x.user_id === uid);
 const periodsOf = uid => periods.filter(p => p.user_id === uid).sort((a, b) => a.date_from.localeCompare(b.date_from));
 
-// Что у человека в этот день по графику: null — свободен.
+// Время смены «08:00–20:00» и признак «через полночь» (ночь, сутки).
+const hm = t => t ? String(t).slice(0, 5) : "";
+const stTime = st => st && st.start_time && st.end_time ? hm(st.start_time) + "–" + hm(st.end_time) : "";
+const stOvernight = st => !!(st && st.start_time && st.end_time && hm(st.end_time) <= hm(st.start_time));
+const stName = st => st.name + (st.company ? " · " + st.company : "") + (stTime(st) ? " " + stTime(st) : "");
+
+// Что у человека в этот день по графику: null — свободен. st — вид смены (для времени).
 function personDay(uid, k){
   const ps = periods.filter(p => p.user_id === uid && p.date_from <= k && p.date_to >= k);
   const busy = ps.find(p => p.kind === "busy");
@@ -1073,17 +1099,35 @@ function personDay(uid, k){
   const ov = staffDays.find(d => d.user_id === uid && d.day === k);
   if(ov){
     const st = ov.shift_type_id && shiftTypes.find(t => t.id === ov.shift_type_id);
-    return st && st.is_work ? { t:"shift", why:st.name + (ov.note ? " — " + ov.note : "") } : null;
+    return st && st.is_work ? { t:"shift", why:stName(st), st } : null;
   }
   const sc = scheduleOf(uid);
   if(sc){
     const vac = ps.find(p => p.kind === "free");
     const cyc = sc.work_days + sc.off_days, m = ((dayDiff(k, sc.anchor) % cyc) + cyc) % cyc;
     const pst = sc.shift_type_id && shiftTypes.find(t => t.id === sc.shift_type_id);
-    if(m < sc.work_days) return vac ? { t:"vac", why:vac.note || "Отпуск на основной работе" } : { t:"shift", why:pst ? pst.name : (sc.label || "Основная работа") + " — смена" };
+    if(m < sc.work_days) return vac ? { t:"vac", why:vac.note || "Отпуск на основной работе" } : { t:"shift", why:pst ? stName(pst) : (sc.label || "Основная работа") + " — смена", st:pst || null };
     if(vac) return { t:"vac", why:vac.note || "Отпуск на основной работе" };
   }
   return null;
+}
+// Подсказка менеджеру на день: «после ночной до 08:00», «смена до 20:00 — освободится к вечеру».
+function personHint(uid, k){
+  const d = personDay(uid, k);
+  if(d && d.t === "busy") return "";
+  if(d && d.t === "shift"){
+    if(d.st && d.st.end_time && !stOvernight(d.st)) return `смена до ${hm(d.st.end_time)} — сможет только после`;
+    if(d.st && stOvernight(d.st)) return `уходит на смену в ${hm(d.st.start_time)}`;
+    return "";
+  }
+  const prev = personDay(uid, addDays(k, -1));
+  if(prev && prev.t === "shift" && stOvernight(prev.st)) return `после ночной смены, свободен с ${hm(prev.st.end_time)}`;
+  return "";
+}
+function hintsText(uid, from, to){
+  const out = [];
+  for(let k = from; k <= to; k = addDays(k, 1)){ const h = personHint(uid, k); if(h) out.push((from === to ? "" : fmtD(k) + ": ") + h); }
+  return out.join("; ");
 }
 // Проблемные дни человека в диапазоне дат (смены и недоступность).
 function personIssues(uid, from, to){
@@ -1109,7 +1153,7 @@ function issuesText(iss){
   if(!iss.length) return "";
   const shifts = iss.filter(x => x.t === "shift").map(x => fmtD(x.k)), busy = iss.filter(x => x.t === "busy");
   const out = [];
-  if(shifts.length) out.push(`Смена на основной работе: ${shifts.join(", ")}`);
+  if(shifts.length) out.push(`Смена на основной работе: ${iss.filter(x => x.t === "shift").map(x => fmtD(x.k) + (x.st && stTime(x.st) ? " " + stTime(x.st) : "")).join(", ")}`);
   if(busy.length) out.push(`Недоступен ${busy.map(x => fmtD(x.k)).join(", ")}${busy[0].why ? " (" + busy[0].why + ")" : ""}`);
   return out.join(". ");
 }
@@ -1128,9 +1172,10 @@ function renderAvail(){
   const rows = ppl.map(p => `<tr><th class="nmcol"><button type="button" class="link" data-sched="${p.id}">${esc(p.full_name || p.email)}</button></th>${days.map(k => {
     const d = personDay(p.id, k);
     const evs = events.filter(e => isActive(e) && e.date_from <= k && e.date_to >= k && crewOf(e.id).some(c => c.user_id === p.id));
-    const cls = [d ? d.t : "", evs.length ? "ev" : "", (evs.length && d && (d.t === "shift" || d.t === "busy")) ? "clash" : "", k === t ? "today" : ""].filter(Boolean).join(" ");
-    const tip = [d ? d.why : "", ...evs.map(e => "Мероприятие: " + e.title)].filter(Boolean).join("\n") || "Свободен";
-    const label = evs.length ? (evs.length > 1 ? evs.length : esc(evs[0].title.slice(0, 2))) : (d && d.t === "shift" ? "С" : d && d.t === "busy" ? "—" : "");
+    const hint = personHint(p.id, k);
+    const cls = [d ? d.t : "", !d && hint ? "after" : "", evs.length ? "ev" : "", (evs.length && d && (d.t === "shift" || d.t === "busy")) ? "clash" : "", k === t ? "today" : ""].filter(Boolean).join(" ");
+    const tip = [d ? d.why : "", hint, ...evs.map(e => "Мероприятие: " + e.title)].filter(Boolean).join("\n") || "Свободен";
+    const label = evs.length ? (evs.length > 1 ? evs.length : esc(evs[0].title.slice(0, 2))) : (d && d.t === "shift" ? esc((d.st && (d.st.company || d.st.short)) || "С") : d && d.t === "busy" ? "—" : !d && hint ? "·" : "");
     return `<td class="${cls}" title="${esc(fmtD(k, { weekday:"short", day:"numeric", month:"short" }) + ": " + tip)}"${evs.length === 1 ? ` data-ev="${evs[0].id}"` : ""}>${label}</td>`;
   }).join("")}</tr>`).join("");
   $("avTable").innerHTML = `<thead>${head}</thead><tbody>${rows}</tbody>`;

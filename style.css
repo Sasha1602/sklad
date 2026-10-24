@@ -686,3 +686,10 @@ table.av{border-collapse:collapse;font-size:12.5px;width:100%;font-variant-numer
 .osmrow input{width:18px;height:18px}
 .osmbox .actions{align-items:center;flex-wrap:wrap}
 .osmbox .hint{flex-basis:100%;margin:6px 0 0}
+
+/* «Смены»: подсказки менеджеру и ответ на выезд */
+.av td.after,.avlegend .cell.after{background:var(--warn-bg);color:var(--warn);font-weight:700}
+.crow .chint{color:var(--warn)}
+.replybar{display:flex;gap:8px;margin-top:8px;max-width:340px}
+.replybar .btn{flex:1}
+.replybar .btn.danger{background:var(--bad-bg)}
